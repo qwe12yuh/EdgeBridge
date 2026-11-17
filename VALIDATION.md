@@ -17,7 +17,7 @@ Independent MIT implementation. The modified Deskflow adapter retains its separa
 | Mac → Windows ordinary PPTX return | User-confirmed successful | Actual 202,615-byte file, target entered, OLE returned DROP+COPY. The current 2s finish deadline incorrectly reported cancellation before the late native result; telemetry/result-lifecycle issue remains |
 | Bidirectional ordinary PPTX cross-screen drop | Passed by human test | User confirmed Windows → Mac was smooth, then separately confirmed the return to Windows succeeded |
 | Broader interactive regression | Pending | More files, directories, final target changes, cancellation/recovery and fast release remain to be checked |
-| GitHub Actions | Not run | Local repository, no remote publication yet |
+| GitHub Actions | All 3 jobs passed | [Release commit checks](https://github.com/qwe12yuh/EdgeBridge/actions/runs/44051648904): Ubuntu transport tests and macOS/Windows native compilation/self-tests; local results above are reported separately |
 
 The receiver first stages a verified copy; staging is not a successful native drop. Transfers retain sources and never overwrite the receiver staging directory. Actual Finder/Explorer destination collision handling remains controlled by the OS.
 

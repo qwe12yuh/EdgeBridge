@@ -1,5 +1,6 @@
 <p align="center"><img src="docs/assets/hero.svg" alt="EdgeBridge — Two computers. One continuous drag." width="100%"></p>
 <p align="center">
+  <a href="https://github.com/qwe12yuh/EdgeBridge/actions/workflows/ci.yml"><img alt="Checks" src="https://github.com/qwe12yuh/EdgeBridge/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-63d6bf"></a>
   <img alt="macOS and Windows" src="https://img.shields.io/badge/platform-macOS%20%26%20Windows-80aaff">
   <img alt="Developer preview" src="https://img.shields.io/badge/status-developer%20preview-f4bf75">
