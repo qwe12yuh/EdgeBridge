@@ -6,17 +6,18 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 export class SourceGesture extends EventEmitter {
   constructor({ route, native, remote, fixture, fixtureHash, target, source, edge = 'right',
     normalize = path.resolve, requireTargetNotification = true, targetStartAck = false, allowSelection = false,
-    verifyTargetEnd = false, destinationStart = false, validPath = name => path.isAbsolute(name) || path.win32.isAbsolute(name), timeout = 2500 }) {
+    verifyTargetEnd = false, destinationStart = false, validPath = name => path.isAbsolute(name) || path.win32.isAbsolute(name),
+    timeout = 2500, finishTimeout = Math.max(timeout * 4, timeout) }) {
     super(); Object.assign(this, { route, native, remote, fixture: fixture ? normalize(fixture) : undefined, fixtureHash, target, sourceName: source, edge,
-      normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, validPath, timeout });
+      normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, validPath, timeout, finishTimeout });
     this.retired = new Set();
   }
   invoke(fn, command) {
     Promise.resolve().then(() => fn(command)).catch(error => { if (this.session?.id === command.id) this.cancel(error.message); });
   }
-  arm() {
+  arm(ms = this.timeout) {
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.cancel('Gesture phase timed out'), this.timeout);
+    this.timer = setTimeout(() => this.cancel('Gesture phase timed out'), ms);
   }
   source(event) {
     if (event.event === 'source-prepare') {
@@ -60,7 +61,14 @@ export class SourceGesture extends EventEmitter {
     }
     if (event.generation !== s.generation) return;
     s.lastRouteSeq = event.seq;
-    if (event.event === 'cancelled') { this.cancel(event.reason || 'Router cancelled gesture'); return; }
+    if (event.event === 'cancelled') {
+      if (s.phase === 'finishing' && !this.verifyTargetEnd && event.reason === 'finish-timeout') {
+        s.routeFinished = true;
+        return;
+      }
+      this.cancel(event.reason || 'Router cancelled gesture');
+      return;
+    }
     if (event.event === 'commit' && s.phase === 'ready') {
       s.commitToken = event.commitToken;
       s.phase = 'committing'; this.arm();
@@ -90,14 +98,23 @@ export class SourceGesture extends EventEmitter {
       if (s.phase === 'finishing') this.received(s.pendingEnd);
     } else if (event.event === 'ended') {
       if (s.phase !== 'active') { this.cancel('Physical release before destination activation'); return; }
-      s.phase = 'finishing'; this.arm();
+      s.phase = 'finishing'; this.arm(this.finishTimeout);
       this.invoke(this.remote, { command: 'release', id: s.id, generation: s.generation });
+      if (s.dropReleased && !this.verifyTargetEnd && !s.routeFinished) {
+        s.routeFinished = true;
+        this.invoke(this.route, { command: 'finish', id: s.id, generation: s.generation });
+      }
       if (s.pendingEnd) this.received(s.pendingEnd);
     }
   }
   received(event) {
     const s = this.session;
-    if (!s || event.id !== s.id || event.generation !== s.generation) return;
+    if (!s || event.id !== s.id || event.generation !== s.generation) {
+      if (event.event === 'ended' && typeof event.id === 'string' && this.retired.has(event.id)) {
+        this.emit('late-result', { id: event.id, generation: event.generation, accepted: event.accepted === true, copied: event.copied === true });
+      }
+      return;
+    }
     if (event.event === 'prepared' && s.phase === 'preparing-target') {
       s.phase = 'ready'; clearTimeout(this.timer);
       this.invoke(this.route, { command: 'ready', id: s.id, generation: s.generation });
@@ -120,6 +137,17 @@ export class SourceGesture extends EventEmitter {
     else if (event.event === 'target-entered') {
       try { if (BigInt(event.hwnd) !== 0n) s.targetObserved = true; } catch { /* malformed/null HWND is not a target */ }
     }
+    else if (event.event === 'drop-released' && (s.phase === 'active' || s.phase === 'finishing')) {
+      s.dropReleased = true;
+      this.emit('drop-released', { id: s.id, generation: s.generation });
+      if (s.phase === 'finishing') {
+        this.arm(this.finishTimeout);
+        if (!this.verifyTargetEnd && !s.routeFinished) {
+          s.routeFinished = true;
+          this.invoke(this.route, { command: 'finish', id: s.id, generation: s.generation });
+        }
+      }
+    }
     else if (event.event === 'ended') {
       if (this.verifyTargetEnd && event.accepted === true && event.copied === true && !s.endVerified && (s.phase === 'active' || s.phase === 'finishing')) {
         if (!Number.isFinite(event.nativeEndedUptimeMs) || event.nativeEndedUptimeMs <= 0) { this.cancel('Missing native monotonic end timestamp'); return; }
@@ -128,16 +156,18 @@ export class SourceGesture extends EventEmitter {
           s.verificationRequested = true;
           this.invoke(this.route, { command: 'target-ended', id: s.id, generation: s.generation, nativeEndedUptimeMs: event.nativeEndedUptimeMs });
         }
-        this.arm(); return;
+        this.arm(this.finishTimeout); return;
       }
       // AppKit can finish on the real HID up before the router's event queue reports it.
       if (s.phase === 'active' && event.accepted === true && event.copied === true) {
         if (!this.targetStartAck) { this.cancel('Native drop completed before the authoritative release'); return; }
-        s.pendingEnd = event; this.arm(); return;
+        s.pendingEnd = event; this.arm(this.finishTimeout); return;
       }
       const accepted = s.phase === 'finishing' && event.accepted === true && event.copied === true && s.loopObserved === true && (!this.requireTargetNotification || s.targetObserved === true);
-      if (s.phase !== 'finishing' && s.phase !== 'cancelling') this.invoke(this.route, { command: 'cancel', id: s.id, generation: s.generation });
-      this.invoke(this.route, { command: 'finish', id: s.id, generation: s.generation });
+      if (!s.routeFinished) {
+        if (s.phase !== 'finishing' && s.phase !== 'cancelling') this.invoke(this.route, { command: 'cancel', id: s.id, generation: s.generation });
+        this.invoke(this.route, { command: 'finish', id: s.id, generation: s.generation });
+      }
       this.invoke(this.native, { command: 'reset', id: s.id });
       clearTimeout(this.timer); this.session = undefined; this.retire(s.id);
       this.emit('result', { id: s.id, generation: s.generation, accepted,
@@ -151,16 +181,21 @@ export class SourceGesture extends EventEmitter {
     clearTimeout(this.timer); s.phase = 'cancelling'; s.cancelReason = reason;
     this.emit('cancelling', { id: s.id, generation: s.generation, reason });
     const command = { command: 'cancel', id: s.id, ...(s.generation ? { generation: s.generation } : {}) };
-    for (const [fn, message] of [[this.route, command], [this.remote, command], [this.native, { command: 'reset', id: s.id }]]) {
+    const targets = [
+      ...(s.routeFinished ? [] : [[this.route, command]]),
+      ...(s.dropReleased ? [] : [[this.remote, command]]),
+      [this.native, { command: 'reset', id: s.id }],
+    ];
+    for (const [fn, message] of targets) {
       Promise.resolve().then(() => fn(message)).catch(() => {});
     }
     const finish = () => {
       if (this.session !== s) return;
       this.session = undefined; this.retire(s.id);
-      if (s.generation) Promise.resolve(this.route({ command: 'finish', id: s.id, generation: s.generation })).catch(() => {});
+      if (s.generation && !s.routeFinished) Promise.resolve(this.route({ command: 'finish', id: s.id, generation: s.generation })).catch(() => {});
       this.emit('result', { id: s.id, accepted: false, experiment: this.allowSelection ? 'verified-file-transfer' : 'pre-positioned-fixture', error: reason });
     };
-    if (s.generation && !s.pendingEnd) this.timer = setTimeout(finish, this.timeout);
+    if (s.generation && !s.pendingEnd && !s.routeFinished) this.timer = setTimeout(finish, this.timeout);
     else finish();
   }
   retire(id) { this.retired.add(id); if (this.retired.size > 32) this.retired.delete(this.retired.values().next().value); }

@@ -59,7 +59,7 @@ class GestureLab {
         public long generation, seq, deadline;
         public int lease;
         public string[] paths;
-        public bool activated, running, released, cancelled, observed;
+        public bool activated, running, released, dropReleased, cancelled, observed;
     }
     class Machine {
         public readonly object gate = new object();
@@ -105,17 +105,17 @@ class GestureLab {
                 var s=session;
                 if(s==null || s.id!=id || s.generation!=generation || seq<=s.seq) throw new ArgumentException("Stale session/sequence");
                 if(kind!="activate" && kind!="release" && kind!="cancel" && kind!="heartbeat") throw new ArgumentException("Unknown command");
-                if(Now>s.deadline) { s.cancelled=true; s.reason="lease-expired"; throw new ArgumentException("Expired session"); }
+                if(Now>s.deadline && !s.dropReleased) { s.cancelled=true; s.reason="lease-expired"; throw new ArgumentException("Expired session"); }
                 if(kind=="activate" && (s.activated || s.released || s.cancelled)) throw new ArgumentException("Cannot activate completed gesture");
                 s.seq=seq; s.deadline=Now+s.lease;
                 if(kind=="activate") s.activated=true;
                 if(kind=="release") { s.released=true; if(!s.running) {s.cancelled=true;s.reason="released-before-loop";} }
-                if(kind=="cancel") {s.cancelled=true;s.reason="cancelled";}
+                if(kind=="cancel" && !s.dropReleased) {s.cancelled=true;s.reason="cancelled";}
                 return kind;
             }
         }
-        public void Stop(string reason) { lock(gate) {stopping=true;if(session!=null){session.cancelled=true;session.reason=reason;}} }
-        public void Expire() { lock(gate) { if(session!=null && Now>session.deadline) { session.cancelled=true;session.reason="lease-expired"; } } }
+        public void Stop(string reason) { lock(gate) {stopping=true;if(session!=null && !session.dropReleased){session.cancelled=true;session.reason=reason;}} }
+        public void Expire() { lock(gate) { if(session!=null && !session.dropReleased && Now>session.deadline) { session.cancelled=true;session.reason="lease-expired"; } } }
     }
     // State-only candidate gate is exercised without creating windows or injecting input.
     class SourceState {
@@ -251,10 +251,17 @@ class GestureLab {
         public int QueryContinueDrag(bool escape,uint keys) {
             lock(machine.gate) {
                 if(!s.observed) {s.observed=true; Emit(new {@event="drag-loop-running",id=s.id,generation=s.generation,seq=s.seq});}
-                if(escape && !s.cancelled) {s.cancelled=true;s.reason="escape";}
-                if(Now>s.deadline) {s.cancelled=true;s.reason="lease-expired";}
+                if(escape && !s.cancelled && !s.dropReleased) {s.cancelled=true;s.reason="escape";}
+                if(!s.dropReleased && Now>s.deadline) {s.cancelled=true;s.reason="lease-expired";}
                 if(s.cancelled) return Cancel;
-                return s.released ? Drop : 0;
+                if(s.released) {
+                    if(!s.dropReleased) {
+                        s.dropReleased=true;
+                        Emit(new {@event="drop-released",id=s.id,generation=s.generation,seq=s.seq});
+                    }
+                    return Drop;
+                }
+                return 0;
             }
         }
         public int GiveFeedback(uint effect) { if(effect!=lastEffect) { lastEffect=effect;Emit(new {@event="feedback",id=s.id,generation=s.generation,effect=effect}); }return DefaultCursors; }
@@ -311,6 +318,8 @@ class GestureLab {
         try {m.Accept(Command("activate",id,3,file));return 4;}catch(ArgumentException){}
         m.Stop("stdin-eof");if(!m.session.cancelled)return 5;
         m=new Machine();id=Guid.NewGuid().ToString();m.Accept(Command("prepare",id,1,file));m.session.deadline=Now-1;m.Expire();if(!m.session.cancelled)return 6;
+        m=new Machine();id=Guid.NewGuid().ToString();m.Accept(Command("prepare",id,1,file));m.session.running=true;m.Accept(Command("release",id,2,file));m.session.dropReleased=true;
+        m.session.deadline=Now-1;m.Expire();m.Accept(Command("cancel",id,3,file));if(m.session.cancelled)return 9;
         // An explicit P/Invoke interface parameter can work even when OLE's later
         // QueryInterface cannot discover an internal interface. Test the actual CCW.
         var source=new Source(m,m.session);
@@ -360,10 +369,16 @@ class GestureLab {
         SourceEdge sourceEdge=privateTest?null:new SourceEdge();
         var watchdog=new System.Threading.Timer(delegate {
             machine.Expire();
-            bool terminal,running,observed,cancelled;
-            lock(machine.gate) {terminal=machine.session!=null&&(machine.session.cancelled||machine.session.released);running=machine.session!=null&&machine.session.running;observed=machine.session!=null&&machine.session.observed;cancelled=machine.session!=null&&machine.session.cancelled;}
+            bool terminal,running,observed,cancelled,dropReleased;
+            lock(machine.gate) {
+                terminal=machine.session!=null&&(machine.session.cancelled||machine.session.released);
+                running=machine.session!=null&&machine.session.running;
+                observed=machine.session!=null&&machine.session.observed;
+                cancelled=machine.session!=null&&machine.session.cancelled;
+                dropReleased=machine.session!=null&&machine.session.dropReleased;
+            }
             if(running&&!observed)Wake();
-            if(terminal) {
+            if(terminal&&!dropReleased) {
                 Wake();
                 if(running&&cancelled) {if(Interlocked.Read(ref wakeStarted)==0)Interlocked.Exchange(ref wakeStarted,Now);else if(Now-Interlocked.Read(ref wakeStarted)>1500){Emit(new {@event="hard-stop",error="OLE did not consume cancellation"});Environment.Exit(9);}}
                 else if(!running) Queue(EndWithoutLoop);

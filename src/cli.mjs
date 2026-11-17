@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { collect } from './files.mjs';
 import { createReceiver, send } from './transport.mjs';
+import { checkConfig } from './config-check.mjs';
 
 const [command, ...args] = process.argv.slice(2);
 try {
@@ -46,8 +47,12 @@ try {
     const peer = JSON.parse(await fs.readFile(args[0], 'utf8'));
     const result = await send(peer, await collect(args.slice(1)));
     console.log(JSON.stringify({ event: 'verified-copy', ...result }));
+  } else if (command === 'check') {
+    if (!args[0]) throw Error('check requires a configuration file path');
+    const summary = await checkConfig(args[0]);
+    console.log(JSON.stringify({ event: 'config-valid', ...summary }));
   } else {
-    console.log('EdgeBridge alpha\n  init <new-directory>\n  serve <receiver.local.json>\n  send <peer.local.json> <files-or-folders...>');
+    console.log('EdgeBridge alpha\n  init <new-directory>\n  serve <receiver.local.json>\n  send <peer.local.json> <files-or-folders...>\n  check <config.local.json>');
     if (command) process.exitCode = 1;
   }
 } catch (error) { console.error(error.message); process.exitCode = 1; }

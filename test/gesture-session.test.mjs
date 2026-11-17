@@ -87,3 +87,31 @@ test('lab refuses arbitrary files and cancellation has a bounded recovery deadli
   t.mock.timers.tick(100); await flush(); assert.equal(c.g.session, undefined);
   assert.equal(c.results[0].error, 'Link lost'); assert.equal(c.route.at(-1).command, 'finish');
 });
+test('drop-released finishes the router immediately and waits for slow post-release OLE copy', async t => {
+  const c = setup(t); await c.enter();
+  c.received({ event: 'drag-loop-running' }); c.received({ event: 'target-entered', hwnd: '456' });
+  c.routed({ event: 'ended', seq: 4, reason: 'released' }); await flush();
+  assert.equal(c.remote.at(-1).command, 'release');
+  c.received({ event: 'drop-released' }); await flush();
+  assert.equal(c.route.at(-1).command, 'finish');
+  // Router finish-timeout or elapsed >100ms phase timeout does not abort an active post-release copy within finishTimeout (400ms).
+  c.routed({ event: 'cancelled', seq: 5, reason: 'finish-timeout' });
+  t.mock.timers.tick(250); await flush();
+  assert.equal(c.results.length, 0);
+  c.received({ event: 'ended', copied: true, accepted: true }); await flush();
+  assert.equal(c.results.length, 1);
+  assert.equal(c.results[0].accepted, true);
+  assert.equal(c.route.filter(x => x.command === 'finish').length, 1);
+});
+test('late native completion after finish timeout is surfaced via late-result event', async t => {
+  const c = setup(t); const late = [];
+  c.g.on('late-result', event => late.push(event));
+  await c.enter();
+  c.received({ event: 'drag-loop-running' }); c.received({ event: 'target-entered', hwnd: '789' });
+  c.routed({ event: 'ended', seq: 4, reason: 'released' });
+  c.received({ event: 'drop-released' }); await flush();
+  t.mock.timers.tick(500); await flush();
+  assert.equal(c.results[0].accepted, false);
+  c.received({ event: 'ended', copied: true, accepted: true });
+  assert.deepEqual(late, [{ id: c.id, generation: c.generation, accepted: true, copied: true }]);
+});

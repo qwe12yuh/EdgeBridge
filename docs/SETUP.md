@@ -69,7 +69,14 @@ EDGE_BRIDGE_LOG=/private/runtime/core.log \
 sh scripts/build-router-launcher-macos.sh
 ```
 
-配置好 Windows 节点后，先运行 `node src/gesture-lab.mjs <Windows配置>`，再在 Mac 运行 `node src/gesture-lab.mjs <Mac配置>`，最后启动当前构建的 Mac 手势 App。协调器准备好后再启动 App，避免心跳过期。
+配置好 Windows 节点后，可先用 `--check` 校验双端配置文件、证书指纹与配对口令：
+
+```sh
+node src/gesture-lab.mjs --check /private/runtime/windows.local.json
+node src/gesture-lab.mjs --check /private/runtime/mac.local.json
+```
+
+校验通过后，先运行 `node src/gesture-lab.mjs <Windows配置>`，再在 Mac 运行 `node src/gesture-lab.mjs <Mac配置>`，最后启动当前构建的 Mac 手势 App。协调器准备好后再启动 App，避免心跳过期。
 
 源代码中的 `build/`、日志和配对材料不属于发布包。当前发布不提供正式签名二进制；重新构建 ad-hoc App 后，macOS 可能需要重新关联当前构建的已有辅助功能授权。
 

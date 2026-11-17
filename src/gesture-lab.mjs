@@ -10,8 +10,14 @@ import readline from 'node:readline';
 import { SourceGesture } from './gesture-session.mjs';
 import { JsonLines } from './json-lines.mjs';
 import { connectControl, createControlServer } from './control-link.mjs';
-import { gestureInbox, selectedFiles, sameGesture } from './gesture-files.mjs';
+import { cleanupStagedBatch, gestureInbox, selectedFiles, sameGesture } from './gesture-files.mjs';
+import { checkConfig } from './config-check.mjs';
 
+if (process.argv[2] === '--check') {
+  const summary = await checkConfig(process.argv[3]);
+  console.log(JSON.stringify({ event: 'config-valid', ...summary }));
+  process.exit(0);
+}
 const config = JSON.parse(await fs.readFile(process.argv[2], 'utf8'));
 const log = value => console.log(JSON.stringify({ ...value, observedAt: new Date().toISOString(), monotonicNs: String(process.hrtime.bigint()) }));
 const realFiles = config.realFiles === true;
@@ -49,13 +55,19 @@ if (config.role === 'destination') {
     }
     if (!session || event.id !== session.id || event.generation !== session.generation) return;
     void link?.send(event).catch(() => cancel());
-    if (event.event === 'ended') session = undefined;
+    if (event.event === 'ended') {
+      if (event.copied !== true && session.stagedPaths && uploadConfig?.inbox) {
+        void cleanupStagedBatch(uploadConfig.inbox, session.stagedPaths).catch(() => {});
+      }
+      session = undefined;
+    }
   });
   const uploads = realFiles ? await gestureInbox(uploadConfig, {
     authorized: context => !stopping && sameGesture(context, session) && session.nativePrepared === false,
     verified: async (paths, context) => {
       if (!sameGesture(context, session)) throw Error('Incoming gesture ended');
       session.nativePrepared = true;
+      session.stagedPaths = paths;
       await sendNative({ command: 'prepare', id: session.id, generation: session.generation, seq: ++sequence, paths, leaseMs: 2000 });
       log({ event: 'bytes-staged', id: session.id, files: paths.length });
     },
@@ -162,6 +174,7 @@ if (config.role === 'destination') {
     verified: async (paths, context) => {
       if (!sameGesture(context, reverse?.session) || reverse.session.phase !== 'preparing-target') throw Error('Reverse gesture ended');
       reverse.session.filesReady = true;
+      reverse.lastStagedPaths = paths;
       await writeNative({ command: 'incoming-prepare', id: context.gestureId, generation: context.generation, paths });
       log({ event: 'bytes-staged', direction: 'windows-to-mac', id: context.gestureId, files: paths.length });
     },
@@ -172,9 +185,18 @@ if (config.role === 'destination') {
     await new Promise(resolve => uploads.listen(uploadConfig.port, uploadConfig.bind || '127.0.0.1', resolve));
   }
   for (const gesture of gestures) {
+    const direction = gesture.edge === 'left' ? 'windows-to-mac' : 'mac-to-windows';
     const cancelTransfer = value => { transfers.get(value.id)?.abort(); transfers.delete(value.id); uploadReady.get(value.id)?.reject(Error('Gesture cancelled')); };
     gesture.on('cancelling', cancelTransfer); gesture.on('result', cancelTransfer);
-    gesture.on('result', value => log({ event: 'gesture-result', direction: gesture.edge === 'left' ? 'windows-to-mac' : 'mac-to-windows', ...value }));
+    gesture.on('drop-released', value => log({ event: 'gesture-drop-released', direction, ...value }));
+    gesture.on('late-result', value => log({ event: 'gesture-late-result', direction, ...value }));
+    gesture.on('result', value => {
+      if (gesture === reverse && value.accepted !== true && gesture.lastStagedPaths && uploadConfig?.inbox) {
+        void cleanupStagedBatch(uploadConfig.inbox, gesture.lastStagedPaths).catch(() => {});
+      }
+      gesture.lastStagedPaths = undefined;
+      log({ event: 'gesture-result', direction, ...value });
+    });
     gesture.on('rejected', value => log({ event: 'source-rejected', ...value }));
   }
   const sourceEvent = (gesture, other, event) => {

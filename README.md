@@ -44,11 +44,11 @@
 | **内容传输与完整性校验** | 零第三方 npm 依赖，基于 Node.js HTTPS 实现固定证书 TLS、配对口令认证、路径边界检查与 `SHA-256` 校验；文件完整暂存校验后才允许切屏交接。 |
 | **源文件保护与落点语义** | 始终采用**复制语义**，不移动或删除源文件；接收端暂存成功与 Finder / Explorer 最终落盘分别独立验证，同名冲突处理交由目标操作系统原生控制。 |
 | **中文文件名与目录传输** | 传输层自动化测试已覆盖 Unicode/中文路径、多文件、嵌套目录与空目录；原生 UI 层的更多交互组合仍在逐步验收。 |
-| **自动化测试与 CI 检查** | 主仓库 **50 项 Node.js 测试**、macOS/Windows 原生编译与自检、独立 GPL 适配器的 **7 项路由回归测试**，以及 **3 项 GitHub Actions CI 检查**（Ubuntu 传输层测试 + macOS/Windows 原生编译自检）均已通过。 |
+| **自动化测试与 CI 检查** | 主仓库 **53 项 Node.js 测试**、macOS/Windows 原生编译与自检、独立 GPL 适配器的 **7 项路由回归测试**，以及 **3 项 GitHub Actions CI 检查**（Ubuntu 传输层测试 + macOS/Windows 原生编译自检）均已通过。 |
 
 > [!IMPORTANT]
 > **关于自动化测试与实机验收的边界声明**
-> 50 项 Node 测试与 3 项 GitHub CI 检查仅证明传输协议、TLS 证书固定、会话令牌生命周期及原生辅助程序基础编译/自检通过，**不能等同于所有桌面交互场景均已验收**。跨屏拖放的真实可用性以 [VALIDATION.md](VALIDATION.md) 中逐项记录的人工实机测试为准。
+> 53 项 Node 测试与 3 项 GitHub CI 检查仅证明传输协议、TLS 证书固定、会话令牌生命周期及原生辅助程序基础编译/自检通过，**不能等同于所有桌面交互场景均已验收**。跨屏拖放的真实可用性以 [VALIDATION.md](VALIDATION.md) 中逐项记录的人工实机测试为准。
 
 ---
 
@@ -94,13 +94,17 @@ sequenceDiagram
 只需 **Node.js 22+** 与 **OpenSSL**（无任何第三方 npm 依赖），即可在单机验证固定证书 TLS 传输与 `SHA-256` 校验流程：
 
 ```sh
-# 1. 运行 50 项协议与传输层单元测试
+# 1. 运行协议与传输层单元测试
 npm test
 
 # 2. 初始化本地测试证书、私钥与配对配置
 node src/cli.mjs init .state
 
-# 3. 启动本地 HTTPS 接收端
+# 3. 静态校验接收端与发送端配置（证书指纹、私钥、Token 长度）
+node src/cli.mjs check .state/receiver.local.json
+node src/cli.mjs check .state/peer.local.json
+
+# 4. 启动本地 HTTPS 接收端
 node src/cli.mjs serve .state/receiver.local.json
 ```
 
@@ -118,7 +122,7 @@ node src/cli.mjs send .state/peer.local.json /absolute/path/to/example.txt
 
 1. **构建双端原生辅助程序**：在 macOS 编译 `GestureLab.swift`（需授予辅助功能权限）并运行 `--self-test`；在 Windows 编译 `GestureLab.cs` 并运行 `--self-test`。
 2. **构建独立 GPL 路由适配器**：按照 [EdgeBridge-Deskflow-Adapter](https://github.com/qwe12yuh/EdgeBridge-Deskflow-Adapter) 说明，基于 Deskflow `v1.27.0` 打补丁并编译隔离运行的 `deskflow-core`。
-3. **生成双端配对配置并建立 SSH 隧道**：参照 [examples/README.md](examples/README.md) 在仓库外配置 Mac 协调端（`role=source`）与 Windows 节点（`role=destination`），转发 `24813`（控制）、`24814`（Mac 接收）与 `24815`（Windows 接收）端口。
+3. **生成双端配对配置并建立 SSH 隧道**：参照 [examples/README.md](examples/README.md) 在仓库外配置 Mac 协调端（`role=source`）与 Windows 节点（`role=destination`），使用 `node src/gesture-lab.mjs --check <config.local.json>` 预检无误后，转发 `24813`（控制）、`24814`（Mac 接收）与 `24815`（Windows 接收）端口。
 4. **按序启动会话**：启动带 `EDGEBRIDGE_ROUTE_SOCKET` 的隔离 `deskflow-core` → 启动 Windows `gesture-lab.mjs` → 启动 Mac `gesture-lab.mjs` → 启动 Mac 手势 App。
 
 完整命令、环境变量与验收步骤请直接阅读 **[双机开发部署指南 (`docs/SETUP.md`)](docs/SETUP.md)**。
@@ -132,7 +136,7 @@ node src/cli.mjs send .state/peer.local.json /absolute/path/to/example.txt
 
 - **需手动部署，无安装器或开机自启**：当前仅提供源码发布，**没有一键安装程序、正式代码签名安装包、局域网自动发现或开机自启服务**。双端编译、TLS 证书配对、SSH 隧道建立及实验停止后的原版 Deskflow 恢复均需手动管理。
 - **先完整暂存再交接，手势单批上限 64 MiB**：跨屏手势目前必须在文件完整暂存至目标端并通过 `SHA-256` 校验后才允许切屏交接，单批上限为 **64 MiB**（`67,108,864` 字节）；**尚未实现大文件按需流式拖放（File Promise / Virtual Stream）**。
-- **Windows 迟到回执误记取消（尚未解决）**：在 Mac → Windows 回拖时，若 Windows OLE 目标应用处理耗时超过当前协调器的 2 秒完成等待窗口，协调器日志仍可能先误记为 `cancelled`，随后才收到原生的 `DROP + COPY` 成功回执。实机测试中文件已实际复制成功，但“物理手势结束”与“目标应用处理完成”的回执生命周期拆分尚未修复，详见 [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)。
+- **Windows 迟到回执误记取消（已拆分两阶段释放，待实机复测消项）**：在早期 Mac → Windows 回拖实测中，若 Windows OLE 目标应用处理耗时超过 2 秒完成等待窗口，协调器日志可能先误记为 `cancelled`，随后才收到原生的 `DROP + COPY` 成功回执（实机测试中文件已实际复制成功）。现已在代码与单测中将“OLE 消费物理释放（`drop-released`，立即通知路由器 `finish`）”与“目标应用复制完成（`finishTimeout` + `late-result`）”拆分为两阶段，待下一轮双机慢目标实机复测确认后正式消项，详见 [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)。
 - **实测覆盖范围有限**：目前人工实测通过的是固定布局（Mac 在左、Windows 在右）下的普通 PPT 单文件双向跨屏拖放；多文件/文件夹连续交互拖放、快速甩动释放、中途频繁切换目标应用及断线重连等场景仍待进一步回归验证。
 
 ---
