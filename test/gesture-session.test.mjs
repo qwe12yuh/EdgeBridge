@@ -102,8 +102,22 @@ test('drop-released finishes the router immediately and waits for slow post-rele
   assert.equal(c.results.length, 1);
   assert.equal(c.results[0].accepted, true);
   assert.equal(c.route.filter(x => x.command === 'finish').length, 1);
+
+  // Without drop-released, router finish-timeout must still cancel the session.
+  const nextId = randomUUID(), nextGen = 8;
+  c.g.source({ id: nextId, observedGeneration: nextGen, event: 'source-prepare', paths: ['/lab/fixture.txt'], observedUptimeMs: 12350 });
+  await flush(); c.g.routed({ id: nextId, generation: nextGen, event: 'prepared', seq: 1 }); await flush();
+  c.g.received({ id: nextId, generation: nextGen, event: 'prepared' }); await flush();
+  c.g.routed({ id: nextId, generation: nextGen, event: 'commit', seq: 2 }); await flush();
+  c.g.source({ id: nextId, generation: nextGen, event: 'source-accepted' }); await flush();
+  c.g.routed({ id: nextId, generation: nextGen, event: 'entered', seq: 3 }); await flush();
+  c.g.received({ id: nextId, generation: nextGen, event: 'drag-loop-running' });
+  c.g.received({ id: nextId, generation: nextGen, event: 'target-entered', hwnd: '456' });
+  c.g.routed({ id: nextId, generation: nextGen, event: 'ended', seq: 4, reason: 'released' }); await flush();
+  c.g.routed({ id: nextId, generation: nextGen, event: 'cancelled', seq: 5, reason: 'finish-timeout' }); await flush();
+  assert.equal(c.g.session.phase, 'cancelling');
 });
-test('late native completion after finish timeout is surfaced via late-result event', async t => {
+test('late native completion after finish timeout is surfaced once for matching generation only', async t => {
   const c = setup(t); const late = [];
   c.g.on('late-result', event => late.push(event));
   await c.enter();
@@ -112,6 +126,12 @@ test('late native completion after finish timeout is surfaced via late-result ev
   c.received({ event: 'drop-released' }); await flush();
   t.mock.timers.tick(500); await flush();
   assert.equal(c.results[0].accepted, false);
+  assert.equal(c.remote.some(x => x.command === 'cancel'), false);
+  // Non-copied end or wrong generation must not trigger late-result.
+  c.received({ event: 'ended', copied: false, accepted: false });
+  c.g.received({ event: 'ended', id: c.id, generation: c.generation + 1, copied: true, accepted: true });
+  assert.equal(late.length, 0);
+  c.received({ event: 'ended', copied: true, accepted: true });
   c.received({ event: 'ended', copied: true, accepted: true });
   assert.deepEqual(late, [{ id: c.id, generation: c.generation, accepted: true, copied: true }]);
 });

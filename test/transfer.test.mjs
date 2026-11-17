@@ -121,14 +121,23 @@ test('TLS transfer verifies bytes, retains sources and refuses invalid peers/upl
     await fs.writeFile(badConfig, JSON.stringify({ bind: '127.0.0.1', port: 24814, token: 'REPLACE_WITH_A_PRIVATE_PAIRING_TOKEN',
       inbox, certificate: path.join(root, 'cert.pem'), key: path.join(root, 'key.pem') }));
     await assert.rejects(checkConfig(badConfig), /token/iu);
+    const mismatchConfig = path.join(root, 'mismatch.local.json');
+    await fs.writeFile(mismatchConfig, JSON.stringify({ bind: '127.0.0.1', port: 24814, token,
+      inbox, certificate: path.join(root, 'cert.pem'), key: path.join(root, 'other-key.pem') }));
+    await assert.rejects(checkConfig(mismatchConfig), /do not match/iu);
 
     // Refuses to delete paths outside inbox or non-incoming directories.
+    const keepDir = path.join(inbox, 'user-folder');
+    await fs.mkdir(keepDir, { recursive: true });
     assert.equal(await cleanupStagedBatch(inbox, [path.join(root, '资料', '空.txt')]), false);
+    assert.equal(await cleanupStagedBatch(inbox, [path.join(keepDir, 'file.txt')]), false);
     const stagedCopy = (await send(peer, manifest)).paths[0];
     assert.equal(await cleanupStagedBatch(inbox, [stagedCopy]), true);
     await assert.rejects(fs.stat(path.dirname(stagedCopy)), { code: 'ENOENT' });
+    assert.equal(await pruneStagedInbox(inbox, { maxAgeMs: 60 * 60 * 1000 }), 0);
     const pruned = await pruneStagedInbox(inbox, { maxAgeMs: 0, activeFolder: path.dirname(received) });
     assert.ok(pruned >= 1);
     assert.equal((await fs.stat(path.join(received, '随机.bin'))).isFile(), true);
+    assert.equal((await fs.stat(keepDir)).isDirectory(), true);
   });
 });

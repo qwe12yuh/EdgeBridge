@@ -14,9 +14,14 @@ import { cleanupStagedBatch, gestureInbox, selectedFiles, sameGesture } from './
 import { checkConfig } from './config-check.mjs';
 
 if (process.argv[2] === '--check') {
-  const summary = await checkConfig(process.argv[3]);
-  console.log(JSON.stringify({ event: 'config-valid', ...summary }));
-  process.exit(0);
+  try {
+    const summary = await checkConfig(process.argv[3]);
+    console.log(JSON.stringify({ event: 'config-valid', ...summary }));
+    process.exit(0);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
 }
 const config = JSON.parse(await fs.readFile(process.argv[2], 'utf8'));
 const log = value => console.log(JSON.stringify({ ...value, observedAt: new Date().toISOString(), monotonicNs: String(process.hrtime.bigint()) }));
@@ -56,7 +61,7 @@ if (config.role === 'destination') {
     if (!session || event.id !== session.id || event.generation !== session.generation) return;
     void link?.send(event).catch(() => cancel());
     if (event.event === 'ended') {
-      if (event.copied !== true && session.stagedPaths && uploadConfig?.inbox) {
+      if (event.copied === false && event.accepted === false && session.stagedPaths && uploadConfig?.inbox) {
         void cleanupStagedBatch(uploadConfig.inbox, session.stagedPaths).catch(() => {});
       }
       session = undefined;
@@ -169,12 +174,14 @@ if (config.role === 'destination') {
     normalize: name => path.win32.normalize(name).toLowerCase(), allowSelection: realFiles, validPath: path.win32.isAbsolute,
     requireTargetNotification: false, targetStartAck: true, verifyTargetEnd: true, destinationStart: true }) : undefined;
   const gestures = [forward, ...(reverse ? [reverse] : [])];
+  const stagedReverse = new Map();
   const uploads = realFiles ? await gestureInbox(uploadConfig, {
     authorized: context => !stopping && sameGesture(context, reverse?.session) && reverse.session.phase === 'preparing-target' && !reverse.session.filesReady,
     verified: async (paths, context) => {
       if (!sameGesture(context, reverse?.session) || reverse.session.phase !== 'preparing-target') throw Error('Reverse gesture ended');
       reverse.session.filesReady = true;
-      reverse.lastStagedPaths = paths;
+      stagedReverse.set(context.gestureId, paths);
+      if (stagedReverse.size > 32) stagedReverse.delete(stagedReverse.keys().next().value);
       await writeNative({ command: 'incoming-prepare', id: context.gestureId, generation: context.generation, paths });
       log({ event: 'bytes-staged', direction: 'windows-to-mac', id: context.gestureId, files: paths.length });
     },
@@ -190,13 +197,7 @@ if (config.role === 'destination') {
     gesture.on('cancelling', cancelTransfer); gesture.on('result', cancelTransfer);
     gesture.on('drop-released', value => log({ event: 'gesture-drop-released', direction, ...value }));
     gesture.on('late-result', value => log({ event: 'gesture-late-result', direction, ...value }));
-    gesture.on('result', value => {
-      if (gesture === reverse && value.accepted !== true && gesture.lastStagedPaths && uploadConfig?.inbox) {
-        void cleanupStagedBatch(uploadConfig.inbox, gesture.lastStagedPaths).catch(() => {});
-      }
-      gesture.lastStagedPaths = undefined;
-      log({ event: 'gesture-result', direction, ...value });
-    });
+    gesture.on('result', value => log({ event: 'gesture-result', direction, ...value }));
     gesture.on('rejected', value => log({ event: 'source-rejected', ...value }));
   }
   const sourceEvent = (gesture, other, event) => {
@@ -251,7 +252,16 @@ if (config.role === 'destination') {
         }
         if (event.event === 'source-stopped') stop();
         if (typeof event.event === 'string' && event.event.startsWith('source-')) sourceEvent(forward, reverse, event);
-        else reverse?.received(event);
+        else {
+          if (event.event === 'ended' && typeof event.id === 'string') {
+            const stagedPaths = stagedReverse.get(event.id);
+            stagedReverse.delete(event.id);
+            if (stagedPaths && event.copied === false && event.accepted === false && uploadConfig?.inbox) {
+              void cleanupStagedBatch(uploadConfig.inbox, stagedPaths).catch(() => {});
+            }
+          }
+          reverse?.received(event);
+        }
       }
     } catch (error) { if (error.code !== 'ENOENT') { log({ event: 'native-error', error: error.message }); stop(); } }
     finally { await file?.close(); reading = false; }

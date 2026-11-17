@@ -10,7 +10,7 @@ export class SourceGesture extends EventEmitter {
     timeout = 2500, finishTimeout = Math.max(timeout * 4, timeout) }) {
     super(); Object.assign(this, { route, native, remote, fixture: fixture ? normalize(fixture) : undefined, fixtureHash, target, sourceName: source, edge,
       normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, validPath, timeout, finishTimeout });
-    this.retired = new Set();
+    this.retired = new Map();
   }
   invoke(fn, command) {
     Promise.resolve().then(() => fn(command)).catch(error => { if (this.session?.id === command.id) this.cancel(error.message); });
@@ -62,7 +62,7 @@ export class SourceGesture extends EventEmitter {
     if (event.generation !== s.generation) return;
     s.lastRouteSeq = event.seq;
     if (event.event === 'cancelled') {
-      if (s.phase === 'finishing' && !this.verifyTargetEnd && event.reason === 'finish-timeout') {
+      if (s.phase === 'finishing' && s.dropReleased && !this.verifyTargetEnd && event.reason === 'finish-timeout') {
         s.routeFinished = true;
         return;
       }
@@ -110,7 +110,10 @@ export class SourceGesture extends EventEmitter {
   received(event) {
     const s = this.session;
     if (!s || event.id !== s.id || event.generation !== s.generation) {
-      if (event.event === 'ended' && typeof event.id === 'string' && this.retired.has(event.id)) {
+      const prior = typeof event.id === 'string' ? this.retired.get(event.id) : undefined;
+      if (event.event === 'ended' && prior && prior.generation === event.generation && !prior.lateReported &&
+          (event.accepted === true || event.copied === true)) {
+        prior.lateReported = true;
         this.emit('late-result', { id: event.id, generation: event.generation, accepted: event.accepted === true, copied: event.copied === true });
       }
       return;
@@ -169,7 +172,7 @@ export class SourceGesture extends EventEmitter {
         this.invoke(this.route, { command: 'finish', id: s.id, generation: s.generation });
       }
       this.invoke(this.native, { command: 'reset', id: s.id });
-      clearTimeout(this.timer); this.session = undefined; this.retire(s.id);
+      clearTimeout(this.timer); this.session = undefined; this.retire(s.id, s.generation);
       this.emit('result', { id: s.id, generation: s.generation, accepted,
         nativeAccepted: event.accepted === true, loopObserved: s.loopObserved === true, targetObserved: s.targetObserved === true,
         destinationVerified: false, experiment: this.allowSelection ? 'verified-file-transfer' : 'pre-positioned-fixture',
@@ -191,12 +194,15 @@ export class SourceGesture extends EventEmitter {
     }
     const finish = () => {
       if (this.session !== s) return;
-      this.session = undefined; this.retire(s.id);
+      this.session = undefined; this.retire(s.id, s.generation);
       if (s.generation && !s.routeFinished) Promise.resolve(this.route({ command: 'finish', id: s.id, generation: s.generation })).catch(() => {});
       this.emit('result', { id: s.id, accepted: false, experiment: this.allowSelection ? 'verified-file-transfer' : 'pre-positioned-fixture', error: reason });
     };
     if (s.generation && !s.pendingEnd && !s.routeFinished) this.timer = setTimeout(finish, this.timeout);
     else finish();
   }
-  retire(id) { this.retired.add(id); if (this.retired.size > 32) this.retired.delete(this.retired.values().next().value); }
+  retire(id, generation) {
+    this.retired.set(id, { generation, lateReported: false });
+    if (this.retired.size > 32) this.retired.delete(this.retired.keys().next().value);
+  }
 }

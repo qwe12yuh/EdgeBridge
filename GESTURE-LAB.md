@@ -51,7 +51,7 @@ EDGE_BRIDGE_IPC=/private/runtime/native EDGE_BRIDGE_BUILD_ROOT=/private/runtime/
 
 ## 验收边界
 
-Node 测试 50 项通过；Swift 自检与构建通过；Windows 编译、UTF-8/COM/源端状态自检及四项私有 desktop OLE 实验通过；GPL 路由测试 7 项通过。自动测试不能代替以下人工验收：
+Node 测试 53 项通过；Swift 自检与构建通过；Windows 编译、UTF-8/COM/源端状态自检及四项私有 desktop OLE 实验通过；GPL 路由测试 7 项通过。自动测试不能代替以下人工验收：
 
 1. 双向普通文件连续跨屏，按住改选目标后仅在最终落点出现副本，源文件保留且哈希相符。
 2. 松手前图标持续跟随，松手后及时结束，无需额外单击；下一次点击与键盘正常。

@@ -5,7 +5,10 @@ import { createPrivateKey, X509Certificate } from 'node:crypto';
 import { DRAG_BYTES } from './gesture-files.mjs';
 
 const validPort = port => Number.isInteger(port) && port >= 1 && port <= 65535;
-const validToken = token => typeof token === 'string' && token.length >= 32 && !/^REPLACE_WITH_/u.test(token);
+const validToken = token => typeof token === 'string' && token.length >= 32 && !/^REPLACE_WITH_/iu.test(token);
+const resolveFrom = (baseDir, targetPath) => path.isAbsolute(targetPath) || path.win32.isAbsolute(targetPath)
+  ? targetPath
+  : path.resolve(baseDir, targetPath);
 
 async function readJson(filePath, label) {
   let raw;
@@ -18,33 +21,40 @@ async function readJson(filePath, label) {
   } catch (error) { throw Error(`${label} is not valid JSON (${filePath}): ${error.message}`); }
 }
 
+function parseCertPem(pem, label) {
+  let cert;
+  try { cert = new X509Certificate(pem); }
+  catch (error) { throw Error(`${label} is not a valid X.509 PEM certificate: ${error.message}`); }
+  const now = Date.now(), validTo = Date.parse(cert.validTo);
+  if (Number.isFinite(validTo) && validTo <= now) throw Error(`${label} certificate expired at ${cert.validTo}`);
+  return cert;
+}
+
 async function checkCertFile(certPath, label) {
   const pem = await fs.readFile(certPath, 'utf8').catch(error => {
     throw Error(`${label} certificate file unreadable (${certPath}): ${error.message}`);
   });
-  return checkCertPem(pem, `${label} (${certPath})`);
+  return parseCertPem(pem, `${label} (${certPath})`);
 }
 
-function checkCertPem(pem, label) {
-  try {
-    const cert = new X509Certificate(pem);
-    return { subject: cert.subject, fingerprint256: cert.fingerprint256, validTo: cert.validTo };
-  } catch (error) {
-    throw Error(`${label} is not a valid X.509 PEM certificate: ${error.message}`);
-  }
-}
-
-async function checkPrivateKeyFile(keyPath, label) {
-  const pem = await fs.readFile(keyPath, 'utf8').catch(error => {
+async function checkCertAndKeyPair(certPath, keyPath, label) {
+  const cert = await checkCertFile(certPath, label);
+  const keyPem = await fs.readFile(keyPath, 'utf8').catch(error => {
     throw Error(`${label} private key unreadable (${keyPath}): ${error.message}`);
   });
-  try { createPrivateKey(pem); }
+  let key;
+  try { key = createPrivateKey(keyPem); }
   catch (error) { throw Error(`${label} is not a valid private key (${keyPath}): ${error.message}`); }
+  if (!cert.checkPrivateKey(key)) throw Error(`${label} certificate and private key do not match`);
+  return { subject: cert.subject, fingerprint256: cert.fingerprint256, validTo: cert.validTo };
 }
 
-export async function checkConfig(configPath) {
+export async function checkConfig(configPath, visited = new Set()) {
   if (!configPath) throw Error('Configuration file path is required');
   const resolved = path.resolve(configPath);
+  if (visited.has(resolved)) throw Error(`Circular configuration reference detected: ${resolved}`);
+  visited.add(resolved);
+  const baseDir = path.dirname(resolved);
   const config = await readJson(resolved, 'Configuration');
 
   if (config.role === 'source') {
@@ -53,13 +63,13 @@ export async function checkConfig(configPath) {
     }
     if (!validPort(config.peerPort)) throw Error('Source peerPort must be an integer in 1..65535');
     if (!validToken(config.peerToken)) throw Error('Source peerToken must be at least 32 characters and not a placeholder');
-    const peerCert = await checkCertFile(config.peerCertificate, 'Source peerCertificate');
+    const peerCert = await checkCertFile(resolveFrom(baseDir, config.peerCertificate), 'Source peerCertificate');
     const details = { kind: 'gesture-source', mode: config.realFiles === true ? 'verified-file-transfer' : 'pre-positioned-fixture',
       macName: config.macName, target: config.target, peerPort: config.peerPort, peerFingerprint256: peerCert.fingerprint256 };
     if (config.realFiles === true) {
       if (!config.uploadReceiver || !config.uploadPeer) throw Error('Real-file source configuration requires uploadReceiver and uploadPeer');
-      details.uploadReceiver = await checkConfig(config.uploadReceiver);
-      details.uploadPeer = await checkConfig(config.uploadPeer);
+      details.uploadReceiver = await checkConfig(resolveFrom(baseDir, config.uploadReceiver), new Set(visited));
+      details.uploadPeer = await checkConfig(resolveFrom(baseDir, config.uploadPeer), new Set(visited));
     } else if (!config.fixture || !/^[a-f0-9]{64}$/iu.test(config.fixtureHash || '')) {
       throw Error('Fixture source configuration requires fixture and 64-hex fixtureHash');
     }
@@ -72,14 +82,13 @@ export async function checkConfig(configPath) {
     }
     if (!validPort(config.port)) throw Error('Destination port must be an integer in 1..65535');
     if (!validToken(config.token)) throw Error('Destination token must be at least 32 characters and not a placeholder');
-    const cert = await checkCertFile(config.certificate, 'Destination');
-    await checkPrivateKeyFile(config.key, 'Destination');
+    const pair = await checkCertAndKeyPair(resolveFrom(baseDir, config.certificate), resolveFrom(baseDir, config.key), 'Destination');
     const details = { kind: 'gesture-destination', mode: config.realFiles === true ? 'verified-file-transfer' : 'pre-positioned-fixture',
-      bind: config.bind || '127.0.0.1', port: config.port, fingerprint256: cert.fingerprint256 };
+      bind: config.bind || '127.0.0.1', port: config.port, fingerprint256: pair.fingerprint256 };
     if (config.realFiles === true) {
       if (!config.uploadReceiver || !config.uploadPeer) throw Error('Real-file destination configuration requires uploadReceiver and uploadPeer');
-      details.uploadReceiver = await checkConfig(config.uploadReceiver);
-      details.uploadPeer = await checkConfig(config.uploadPeer);
+      details.uploadReceiver = await checkConfig(resolveFrom(baseDir, config.uploadReceiver), new Set(visited));
+      details.uploadPeer = await checkConfig(resolveFrom(baseDir, config.uploadPeer), new Set(visited));
     } else if (!config.fixture || !/^[a-f0-9]{64}$/iu.test(config.fixtureHash || '')) {
       throw Error('Fixture destination configuration requires fixture and 64-hex fixtureHash');
     }
@@ -92,19 +101,21 @@ export async function checkConfig(configPath) {
     if (url.protocol !== 'https:') throw Error('Peer baseURL must use https://');
     if (!validToken(config.token)) throw Error('Peer token must be at least 32 characters and not a placeholder');
     if (typeof config.certificate !== 'string' || !config.certificate.trim()) throw Error('Peer certificate PEM is required');
-    const cert = checkCertPem(config.certificate, 'Peer certificate');
+    const cert = parseCertPem(config.certificate, 'Peer certificate');
     return { kind: 'transport-peer', baseURL: config.baseURL, fingerprint256: cert.fingerprint256 };
   }
 
-  if (config.inbox && config.certificate && config.key) {
+  if ('inbox' in config || 'certificate' in config || 'key' in config || 'port' in config) {
+    for (const key of ['inbox', 'port', 'token', 'certificate', 'key']) {
+      if (!config[key]) throw Error(`Receiver configuration missing required field: ${key}`);
+    }
     if (!validPort(config.port)) throw Error('Receiver port must be an integer in 1..65535');
     if (!validToken(config.token)) throw Error('Receiver token must be at least 32 characters and not a placeholder');
     if (config.maxBytes !== undefined && (!Number.isSafeInteger(config.maxBytes) || config.maxBytes < 1 || config.maxBytes > DRAG_BYTES)) {
       throw Error(`Gesture receiver maxBytes must be between 1 and ${DRAG_BYTES}`);
     }
-    const cert = await checkCertFile(config.certificate, 'Receiver');
-    await checkPrivateKeyFile(config.key, 'Receiver');
-    return { kind: 'transport-receiver', bind: config.bind || '127.0.0.1', port: config.port, fingerprint256: cert.fingerprint256 };
+    const pair = await checkCertAndKeyPair(resolveFrom(baseDir, config.certificate), resolveFrom(baseDir, config.key), 'Receiver');
+    return { kind: 'transport-receiver', bind: config.bind || '127.0.0.1', port: config.port, fingerprint256: pair.fingerprint256 };
   }
 
   throw Error('Unrecognized configuration schema: expected source, destination, transport-receiver or transport-peer');

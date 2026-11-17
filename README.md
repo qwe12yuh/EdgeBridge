@@ -151,7 +151,7 @@ EdgeBridge/
 │   └── windows/     C# / Win32 STA OLE 左边缘源捕获与 IDropSource 接收端
 ├── scripts/         macOS 与 Windows 本地编译、启动器构建及自检脚本
 ├── examples/        不含密钥与配对凭证的双机配置模板 (mac / windows)
-├── test/            50 项 Node.js 协议、传输、证书固定与会话生命周期测试
+├── test/            53 项 Node.js 协议、传输、证书固定与会话生命周期测试
 └── docs/            部署指南、已知问题说明与 SVG 视觉资源
 ```
 
