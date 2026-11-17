@@ -35,12 +35,18 @@ Windows PowerShell：
 
 ## 配对和控制通道
 
-`node src/cli.mjs init <新的空目录>` 为一个接收端生成 TLS 证书、私钥、接收配置和含配对口令的 peer 配置。双端各使用一套独立材料。
+推荐使用 `init-lab` 在仓库外的私有空目录一次性生成配对好的 `mac/` 与 `windows/` 双端证书、私钥、随机口令与配置骨架：
 
-- 私钥留在接收端。只通过已认证通道向对应发送端交付 peer 配置。
-- 配置里的绝对路径需改成本机路径。示例见 [examples](../examples/README.md)。
+```sh
+node src/cli.mjs init-lab "$HOME/.edgebridge/lab" mac-peer windows-peer
+```
+
+也可通过 `node src/cli.mjs init <新的空目录>` 单独为每个接收端生成材料。配置要点：
+
+- 私钥留在各自接收端，只通过已认证通道（如 `scp` / `sftp`）将生成的 `windows/` 子目录交付至 Windows 本机私有目录。
+- 配置文件内的相对路径均相对于该 JSON 文件所在目录解析；仅需确认 Mac 端 `nativeIPC`、`routeSocket` 与 Windows 端 `nativeHelper` 指向实际构建产物。字段说明见 [examples](../examples/README.md)。
 - `source` 配置表示 Mac 中央协调器，`destination` 配置表示 Windows 节点；当前两者都支持双向文件流，不表示只允许单向发送。
-- 上传接收/发送配置分别是 `uploadReceiver` 与 `uploadPeer`，手势模式上限 64MiB。
+- 上传接收/发送配置分别是 `uploadReceiver` 与 `uploadPeer`，手势模式上限 64MiB。**手势模式的 `uploadReceiver.inbox` 必须使用专用暂存目录**（协调器会自动清理已取消手势及超过 30 分钟的历史 `incoming-*` 批次），不要与 `cli.mjs serve` 的长期收件目录混用。
 - 所有配置放在仓库之外，文件名用 `*.local.json`，不要提交或公开。
 
 当前部署经过 SSH 隧道连接 loopback：Mac 控制客户端连接 Windows 24813，Windows 上传接收端 24815，Mac 上传接收端 24814。通过你已配置的 SSH 主机别名建立：
@@ -69,7 +75,7 @@ EDGE_BRIDGE_LOG=/private/runtime/core.log \
 sh scripts/build-router-launcher-macos.sh
 ```
 
-配置好 Windows 节点后，可先用 `--check` 校验双端配置文件、证书指纹与配对口令：
+配置好 Windows 节点后，可先用 `--check` 校验双端配置字段、证书有效期、私钥配对关系与配对口令（同时输出证书 SHA-256 指纹供核对）：
 
 ```sh
 node src/gesture-lab.mjs --check /private/runtime/windows.local.json

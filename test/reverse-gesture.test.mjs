@@ -77,10 +77,14 @@ test('real-file mode preserves the selected paths without substituting the fixtu
 });
 test('reverse success requires the core to verify native end against the real HID up', async t => {
   const c = setup(t, { verifyTargetEnd: true }); await c.enter(); c.received({ event: 'drag-loop-running' }); await flush();
+  c.received({ event: 'drop-released' }); await flush();
+  assert.equal(c.route.some(x => x.command === 'finish'), false);
   c.received({ event: 'ended', accepted: true, copied: true, nativeEndedUptimeMs: 10100 }); await flush();
   assert.equal(c.route.at(-1).command, 'target-ended'); assert.equal(c.results.length, 0);
   c.routed({ event: 'target-ended-verified', seq: 4 }); assert.equal(c.results.length, 0);
-  c.routed({ event: 'ended', seq: 5 }); assert.equal(c.results[0].accepted, true);
+  c.routed({ event: 'ended', seq: 5 }); await flush();
+  assert.equal(c.results[0].accepted, true);
+  assert.equal(c.route.at(-1).command, 'finish');
 });
 test('a native drop that precedes physical release is cancelled, not matched to a later release', async t => {
   const c = setup(t, { verifyTargetEnd: true }); await c.enter(); c.received({ event: 'drag-loop-running' });

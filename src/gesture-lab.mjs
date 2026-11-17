@@ -11,7 +11,7 @@ import { SourceGesture } from './gesture-session.mjs';
 import { JsonLines } from './json-lines.mjs';
 import { connectControl, createControlServer } from './control-link.mjs';
 import { cleanupStagedBatch, gestureInbox, selectedFiles, sameGesture } from './gesture-files.mjs';
-import { checkConfig } from './config-check.mjs';
+import { checkConfig, loadReceiverConfig, readConfigJson, resolveFrom } from './config-check.mjs';
 
 if (process.argv[2] === '--check') {
   try {
@@ -23,14 +23,29 @@ if (process.argv[2] === '--check') {
     process.exit(1);
   }
 }
-const config = JSON.parse(await fs.readFile(process.argv[2], 'utf8'));
+const { baseDir, config: rawConfig } = await readConfigJson(process.argv[2]);
+const resolveField = value => typeof value === 'string' && value ? resolveFrom(baseDir, value) : value;
+const config = {
+  ...rawConfig,
+  certificate: resolveField(rawConfig.certificate),
+  key: resolveField(rawConfig.key),
+  nativeHelper: resolveField(rawConfig.nativeHelper),
+  nativeIPC: resolveField(rawConfig.nativeIPC),
+  routeSocket: resolveField(rawConfig.routeSocket),
+  peerCertificate: resolveField(rawConfig.peerCertificate),
+  uploadPeer: resolveField(rawConfig.uploadPeer),
+  uploadReceiver: resolveField(rawConfig.uploadReceiver),
+  fixture: resolveField(rawConfig.fixture),
+  macIncomingFixture: resolveField(rawConfig.macIncomingFixture),
+};
 const log = value => console.log(JSON.stringify({ ...value, observedAt: new Date().toISOString(), monotonicNs: String(process.hrtime.bigint()) }));
+const logCleanupError = error => log({ event: 'staging-cleanup-error', error: error.message });
 const realFiles = config.realFiles === true;
 const sha256 = realFiles ? undefined : createHash('sha256').update(await fs.readFile(config.fixture)).digest('hex');
 if (!realFiles && sha256 !== config.fixtureHash) throw Error('Configured pre-positioned fixture hash does not match');
 const timers = [], resources = [];
-const uploadPeer = config.uploadPeer ? JSON.parse(await fs.readFile(config.uploadPeer, 'utf8')) : undefined;
-const uploadConfig = config.uploadReceiver ? JSON.parse(await fs.readFile(config.uploadReceiver, 'utf8')) : undefined;
+const uploadPeer = config.uploadPeer ? (await readConfigJson(config.uploadPeer, 'Upload peer configuration')).config : undefined;
+const uploadConfig = config.uploadReceiver ? await loadReceiverConfig(config.uploadReceiver) : undefined;
 if (realFiles && (!uploadPeer || !uploadConfig)) throw Error('Real-file mode requires a pinned upload peer and receiver configuration');
 let stop = () => { for (const timer of timers) clearInterval(timer); for (const r of resources) { r.destroy?.(); r.kill?.(); r.close?.(); } };
 if (config.role === 'destination') {
@@ -62,12 +77,14 @@ if (config.role === 'destination') {
     void link?.send(event).catch(() => cancel());
     if (event.event === 'ended') {
       if (event.copied === false && event.accepted === false && session.stagedPaths && uploadConfig?.inbox) {
-        void cleanupStagedBatch(uploadConfig.inbox, session.stagedPaths).catch(() => {});
+        void cleanupStagedBatch(uploadConfig.inbox, session.stagedPaths, { onError: logCleanupError });
       }
       session = undefined;
     }
   });
   const uploads = realFiles ? await gestureInbox(uploadConfig, {
+    activePaths: () => session?.stagedPaths ? [session.stagedPaths] : [],
+    onCleanupError: logCleanupError,
     authorized: context => !stopping && sameGesture(context, session) && session.nativePrepared === false,
     verified: async (paths, context) => {
       if (!sameGesture(context, session)) throw Error('Incoming gesture ended');
@@ -176,6 +193,8 @@ if (config.role === 'destination') {
   const gestures = [forward, ...(reverse ? [reverse] : [])];
   const stagedReverse = new Map();
   const uploads = realFiles ? await gestureInbox(uploadConfig, {
+    activePaths: () => [...stagedReverse.values()],
+    onCleanupError: logCleanupError,
     authorized: context => !stopping && sameGesture(context, reverse?.session) && reverse.session.phase === 'preparing-target' && !reverse.session.filesReady,
     verified: async (paths, context) => {
       if (!sameGesture(context, reverse?.session) || reverse.session.phase !== 'preparing-target') throw Error('Reverse gesture ended');
@@ -257,7 +276,7 @@ if (config.role === 'destination') {
             const stagedPaths = stagedReverse.get(event.id);
             stagedReverse.delete(event.id);
             if (stagedPaths && event.copied === false && event.accepted === false && uploadConfig?.inbox) {
-              void cleanupStagedBatch(uploadConfig.inbox, stagedPaths).catch(() => {});
+              void cleanupStagedBatch(uploadConfig.inbox, stagedPaths, { onError: logCleanupError });
             }
           }
           reverse?.received(event);

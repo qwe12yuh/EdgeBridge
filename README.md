@@ -100,7 +100,7 @@ npm test
 # 2. 初始化本地测试证书、私钥与配对配置
 node src/cli.mjs init .state
 
-# 3. 静态校验接收端与发送端配置（证书指纹、私钥、Token 长度）
+# 3. 静态校验接收端与发送端配置（校验字段、证书有效期、私钥匹配性并输出指纹）
 node src/cli.mjs check .state/receiver.local.json
 node src/cli.mjs check .state/peer.local.json
 
@@ -122,7 +122,7 @@ node src/cli.mjs send .state/peer.local.json /absolute/path/to/example.txt
 
 1. **构建双端原生辅助程序**：在 macOS 编译 `GestureLab.swift`（需授予辅助功能权限）并运行 `--self-test`；在 Windows 编译 `GestureLab.cs` 并运行 `--self-test`。
 2. **构建独立 GPL 路由适配器**：按照 [EdgeBridge-Deskflow-Adapter](https://github.com/qwe12yuh/EdgeBridge-Deskflow-Adapter) 说明，基于 Deskflow `v1.27.0` 打补丁并编译隔离运行的 `deskflow-core`。
-3. **生成双端配对配置并建立 SSH 隧道**：参照 [examples/README.md](examples/README.md) 在仓库外配置 Mac 协调端（`role=source`）与 Windows 节点（`role=destination`），使用 `node src/gesture-lab.mjs --check <config.local.json>` 预检无误后，转发 `24813`（控制）、`24814`（Mac 接收）与 `24815`（Windows 接收）端口。
+3. **生成双端配对配置并建立 SSH 隧道**：在仓库外运行 `node src/cli.mjs init-lab <私有空目录> <Mac名称> <Windows名称>` 生成配对好的 `mac/` 与 `windows/` 证书及配置包（字段说明见 [examples/README.md](examples/README.md)），使用 `node src/gesture-lab.mjs --check <config.local.json>` 预检无误后，转发 `24813`（控制）、`24814`（Mac 接收）与 `24815`（Windows 接收）端口。
 4. **按序启动会话**：启动带 `EDGEBRIDGE_ROUTE_SOCKET` 的隔离 `deskflow-core` → 启动 Windows `gesture-lab.mjs` → 启动 Mac `gesture-lab.mjs` → 启动 Mac 手势 App。
 
 完整命令、环境变量与验收步骤请直接阅读 **[双机开发部署指南 (`docs/SETUP.md`)](docs/SETUP.md)**。

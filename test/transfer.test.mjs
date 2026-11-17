@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { collect, validateManifest, safeRelative } from '../src/files.mjs';
 import { createReceiver, request, send } from '../src/transport.mjs';
@@ -126,17 +126,38 @@ test('TLS transfer verifies bytes, retains sources and refuses invalid peers/upl
       inbox, certificate: path.join(root, 'cert.pem'), key: path.join(root, 'other-key.pem') }));
     await assert.rejects(checkConfig(mismatchConfig), /do not match/iu);
 
-    // Refuses to delete paths outside inbox or non-incoming directories.
+    // init-lab generates paired mac/ and windows/ bundles that pass gesture-lab --check.
+    const labDir = path.join(root, 'lab-bundle');
+    const initLab = spawnSync(process.execPath, ['src/cli.mjs', 'init-lab', labDir, 'mac-dev', 'win-dev'], { encoding: 'utf8' });
+    assert.equal(initLab.status, 0, initLab.stderr);
+    const macCheck = spawnSync(process.execPath, ['src/gesture-lab.mjs', '--check', path.join(labDir, 'mac', 'mac.local.json')], { encoding: 'utf8' });
+    assert.equal(macCheck.status, 0, macCheck.stderr);
+    assert.equal(JSON.parse(macCheck.stdout).kind, 'gesture-source');
+    const winCheck = spawnSync(process.execPath, ['src/gesture-lab.mjs', '--check', path.join(labDir, 'windows', 'windows.local.json')], { encoding: 'utf8' });
+    assert.equal(winCheck.status, 0, winCheck.stderr);
+    assert.equal(JSON.parse(winCheck.stdout).kind, 'gesture-destination');
+    const failCheck = spawnSync(process.execPath, ['src/gesture-lab.mjs', '--check', badConfig], { encoding: 'utf8' });
+    assert.equal(failCheck.status, 1);
+    assert.doesNotMatch(failCheck.stderr, /at checkConfig/u);
+
+    // Refuses to delete paths outside inbox, non-incoming directories, or mixed batches; supports nested batch paths.
     const keepDir = path.join(inbox, 'user-folder');
     await fs.mkdir(keepDir, { recursive: true });
     assert.equal(await cleanupStagedBatch(inbox, [path.join(root, '资料', '空.txt')]), false);
     assert.equal(await cleanupStagedBatch(inbox, [path.join(keepDir, 'file.txt')]), false);
     const stagedCopy = (await send(peer, manifest)).paths[0];
-    assert.equal(await cleanupStagedBatch(inbox, [stagedCopy]), true);
+    assert.equal(await cleanupStagedBatch(inbox, [stagedCopy, received]), false);
+    assert.equal(await cleanupStagedBatch(inbox, [path.join(stagedCopy, '随机.bin')]), true);
     await assert.rejects(fs.stat(path.dirname(stagedCopy)), { code: 'ENOENT' });
+
+    // Skips batches with in-progress .edgebridge-part-* files and protects activeFolders.
+    const inProgressBatch = path.join(inbox, 'incoming-uploading');
+    await fs.mkdir(inProgressBatch, { recursive: true });
+    await fs.writeFile(path.join(inProgressBatch, '.edgebridge-part-1'), 'part');
     assert.equal(await pruneStagedInbox(inbox, { maxAgeMs: 60 * 60 * 1000 }), 0);
-    const pruned = await pruneStagedInbox(inbox, { maxAgeMs: 0, activeFolder: path.dirname(received) });
+    const pruned = await pruneStagedInbox(inbox, { maxAgeMs: 0, activeFolders: [[received]] });
     assert.ok(pruned >= 1);
+    assert.equal((await fs.stat(path.join(inProgressBatch, '.edgebridge-part-1'))).isFile(), true);
     assert.equal((await fs.stat(path.join(received, '随机.bin'))).isFile(), true);
     assert.equal((await fs.stat(keepDir)).isDirectory(), true);
   });

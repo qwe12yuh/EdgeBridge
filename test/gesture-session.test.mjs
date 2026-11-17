@@ -116,6 +116,25 @@ test('drop-released finishes the router immediately and waits for slow post-rele
   c.g.routed({ id: nextId, generation: nextGen, event: 'ended', seq: 4, reason: 'released' }); await flush();
   c.g.routed({ id: nextId, generation: nextGen, event: 'cancelled', seq: 5, reason: 'finish-timeout' }); await flush();
   assert.equal(c.g.session.phase, 'cancelling');
+  t.mock.timers.tick(100); await flush();
+
+  // If drop-released arrives in active phase before router ended, router finish is sent immediately on ended.
+  const earlyId = randomUUID(), earlyGen = 9;
+  c.g.source({ id: earlyId, observedGeneration: earlyGen, event: 'source-prepare', paths: ['/lab/fixture.txt'], observedUptimeMs: 12360 });
+  await flush(); c.g.routed({ id: earlyId, generation: earlyGen, event: 'prepared', seq: 1 }); await flush();
+  c.g.received({ id: earlyId, generation: earlyGen, event: 'prepared' }); await flush();
+  c.g.routed({ id: earlyId, generation: earlyGen, event: 'commit', seq: 2 }); await flush();
+  c.g.source({ id: earlyId, generation: earlyGen, event: 'source-accepted' }); await flush();
+  c.g.routed({ id: earlyId, generation: earlyGen, event: 'entered', seq: 3 }); await flush();
+  c.g.received({ id: earlyId, generation: earlyGen, event: 'drag-loop-running' });
+  c.g.received({ id: earlyId, generation: earlyGen, event: 'target-entered', hwnd: '456' });
+  c.g.received({ id: earlyId, generation: earlyGen, event: 'drop-released' }); await flush();
+  assert.equal(c.route.filter(x => x.id === earlyId && x.command === 'finish').length, 0);
+  c.g.routed({ id: earlyId, generation: earlyGen, event: 'ended', seq: 4, reason: 'released' }); await flush();
+  assert.equal(c.route.at(-1).command, 'finish');
+  assert.equal(c.route.at(-1).id, earlyId);
+  c.g.received({ id: earlyId, generation: earlyGen, event: 'ended', copied: true, accepted: true }); await flush();
+  assert.equal(c.results.at(-1).accepted, true);
 });
 test('late native completion after finish timeout is surfaced once for matching generation only', async t => {
   const c = setup(t); const late = [];

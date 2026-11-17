@@ -56,7 +56,7 @@ class GestureLab {
     static long Now { get { return Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency; } }
     class Session {
         public string id, reason;
-        public long generation, seq, deadline;
+        public long generation, seq, deadline, dropReleasedAt;
         public int lease;
         public string[] paths;
         public bool activated, running, released, dropReleased, cancelled, observed;
@@ -257,6 +257,7 @@ class GestureLab {
                 if(s.released) {
                     if(!s.dropReleased) {
                         s.dropReleased=true;
+                        s.dropReleasedAt=Now;
                         Emit(new {@event="drop-released",id=s.id,generation=s.generation,seq=s.seq});
                     }
                     return Drop;
@@ -318,8 +319,20 @@ class GestureLab {
         try {m.Accept(Command("activate",id,3,file));return 4;}catch(ArgumentException){}
         m.Stop("stdin-eof");if(!m.session.cancelled)return 5;
         m=new Machine();id=Guid.NewGuid().ToString();m.Accept(Command("prepare",id,1,file));m.session.deadline=Now-1;m.Expire();if(!m.session.cancelled)return 6;
-        m=new Machine();id=Guid.NewGuid().ToString();m.Accept(Command("prepare",id,1,file));m.session.running=true;m.Accept(Command("release",id,2,file));m.session.dropReleased=true;
-        m.session.deadline=Now-1;m.Expire();m.Accept(Command("cancel",id,3,file));if(m.session.cancelled)return 9;
+        m=new Machine();id=Guid.NewGuid().ToString();m.Accept(Command("prepare",id,1,file));m.session.running=true;
+        var dropProbe=new Source(m,m.session);
+        var originalOut=Console.Out;
+        var capturedOut=new StringWriter();
+        try {
+            Console.SetOut(capturedOut);
+            if(dropProbe.QueryContinueDrag(false,0)!=0 || !m.session.observed || m.session.dropReleased) return 9;
+            m.Accept(Command("release",id,2,file));
+            if(dropProbe.QueryContinueDrag(false,0)!=Drop || !m.session.dropReleased || m.session.dropReleasedAt<=0) return 12;
+        } finally { Console.SetOut(originalOut); }
+        string emitted=capturedOut.ToString();
+        if(!emitted.Contains("\"event\":\"drag-loop-running\"") || !emitted.Contains("\"event\":\"drop-released\"")) return 13;
+        m.session.deadline=Now-1;m.Expire();m.Accept(Command("cancel",id,3,file));m.Stop("shutdown");
+        if(m.session.cancelled)return 14;
         // An explicit P/Invoke interface parameter can work even when OLE's later
         // QueryInterface cannot discover an internal interface. Test the actual CCW.
         var source=new Source(m,m.session);
@@ -369,19 +382,25 @@ class GestureLab {
         SourceEdge sourceEdge=privateTest?null:new SourceEdge();
         var watchdog=new System.Threading.Timer(delegate {
             machine.Expire();
-            bool terminal,running,observed,cancelled,dropReleased;
+            bool terminal,running,observed,cancelled,dropReleased,stoppingNow;
+            long dropElapsed=0;
             lock(machine.gate) {
+                stoppingNow=machine.stopping;
                 terminal=machine.session!=null&&(machine.session.cancelled||machine.session.released);
                 running=machine.session!=null&&machine.session.running;
                 observed=machine.session!=null&&machine.session.observed;
                 cancelled=machine.session!=null&&machine.session.cancelled;
                 dropReleased=machine.session!=null&&machine.session.dropReleased;
+                if(dropReleased) dropElapsed=Now-machine.session.dropReleasedAt;
             }
             if(running&&!observed)Wake();
             if(terminal&&!dropReleased) {
                 Wake();
                 if(running&&cancelled) {if(Interlocked.Read(ref wakeStarted)==0)Interlocked.Exchange(ref wakeStarted,Now);else if(Now-Interlocked.Read(ref wakeStarted)>1500){Emit(new {@event="hard-stop",error="OLE did not consume cancellation"});Environment.Exit(9);}}
                 else if(!running) Queue(EndWithoutLoop);
+            } else if(running&&dropReleased&&dropElapsed>(stoppingNow?5000:60000)) {
+                Emit(new {@event="hard-stop",error="OLE target drop exceeded post-release safety bound"});
+                Environment.Exit(9);
             }
             if(machine.stopping&&!running) Queue(Application.ExitThread);
         },null,25,25);
