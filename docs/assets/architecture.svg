@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="arch-title arch-desc">
+  <title id="arch-title">EdgeBridge 架构与许可证边界</title>
+  <desc id="arch-desc">Architecture of EdgeBridge showing the MIT-licensed core and native helpers on macOS and Windows, separated via IPC from the GPL-2.0 Deskflow route adapter.</desc>
+  <defs>
+    <linearGradient id="archBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#081120"/>
+      <stop offset="100%" stop-color="#0c192e"/>
+    </linearGradient>
+    <linearGradient id="mitStroke" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2dd4bf"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="360" rx="16" fill="url(#archBg)"/>
+  <rect x="1" y="1" width="1278" height="358" rx="15" fill="none" stroke="#1e3454" stroke-width="1.5"/>
+
+  <!-- Top Header -->
+  <text x="40" y="38" fill="#f8fafc" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" font-weight="700">双端组件协同与许可证隔离边界（MIT 主仓 vs 独立 GPL 路由适配器）</text>
+  <text x="1240" y="38" text-anchor="end" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5">Loopback + SSH Tunnel · Pinned TLS · Local IPC</text>
+
+  <!-- Left Box: macOS MIT Node -->
+  <g transform="translate(40, 58)">
+    <rect x="0" y="0" width="380" height="190" rx="12" fill="#0d1e36" stroke="#2dd4bf" stroke-width="1.5"/>
+    <rect x="14" y="14" width="124" height="22" rx="6" fill="#0d3336" stroke="#2dd4bf" stroke-width="1"/>
+    <text x="76" y="29" text-anchor="middle" fill="#5eead4" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700">MIT LICENSE (本仓)</text>
+    <text x="150" y="29" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">macOS 协调端与原生助手</text>
+
+    <rect x="18" y="50" width="344" height="54" rx="8" fill="#091526" stroke="#1e3658"/>
+    <text x="32" y="72" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">src/gesture-lab.mjs + src/cli.mjs</text>
+    <text x="32" y="91" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11.5">手势会话协调器 (`role=source`) · HTTPS 上传/接收 (`:24814`)</text>
+
+    <rect x="18" y="116" width="344" height="58" rx="8" fill="#091526" stroke="#1e3658"/>
+    <text x="32" y="138" fill="#2dd4bf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">native/macos/GestureLab.swift</text>
+    <text x="32" y="158" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11.5">右边缘源捕获 · 一次性系统按下许可 · AppKit `NSDraggingSession`</text>
+  </g>
+
+  <!-- Center Channels -->
+  <g transform="translate(436, 68)">
+    <!-- Control Channel -->
+    <rect x="16" y="8" width="376" height="48" rx="8" fill="#0a1628" stroke="#27436b"/>
+    <text x="204" y="28" text-anchor="middle" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700">1. 手势控制通道 (Pinned TLS · Port 24813)</text>
+    <text x="204" y="46" text-anchor="middle" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11">绑定 UUID、物理 generation、会话令牌与原生准备回执</text>
+    <path d="M 0 32 H 16 M 392 32 H 408" stroke="#38bdf8" stroke-width="2"/>
+
+    <!-- File Staging Channel -->
+    <rect x="16" y="70" width="376" height="54" rx="8" fill="#0a1628" stroke="#2dd4bf" stroke-width="1.2"/>
+    <text x="204" y="91" text-anchor="middle" fill="#5eead4" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700">2. 固定证书文件暂存 (HTTPS · Port 24814 / 24815)</text>
+    <text x="204" y="110" text-anchor="middle" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="11">单批 ≤ 64MiB · 配对口令校验 · SHA-256 完整落盘后才允许切屏</text>
+    <path d="M 0 97 H 16 M 392 97 H 408" stroke="#2dd4bf" stroke-width="2" stroke-dasharray="4 3"/>
+
+    <!-- SSH Loopback Notice -->
+    <rect x="56" y="138" width="296" height="28" rx="14" fill="#11223b" stroke="#29466e"/>
+    <text x="204" y="156" text-anchor="middle" fill="#93c5fd" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5">默认仅监听 127.0.0.1 · 经 SSH 隧道转发</text>
+  </g>
+
+  <!-- Right Box: Windows MIT Node -->
+  <g transform="translate(860, 58)">
+    <rect x="0" y="0" width="380" height="190" rx="12" fill="#0d1e36" stroke="#38bdf8" stroke-width="1.5"/>
+    <rect x="14" y="14" width="124" height="22" rx="6" fill="#0d3336" stroke="#2dd4bf" stroke-width="1"/>
+    <text x="76" y="29" text-anchor="middle" fill="#5eead4" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700">MIT LICENSE (本仓)</text>
+    <text x="150" y="29" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">Windows 节点与原生助手</text>
+
+    <rect x="18" y="50" width="344" height="54" rx="8" fill="#091526" stroke="#1e3658"/>
+    <text x="32" y="72" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">src/gesture-lab.mjs + src/cli.mjs</text>
+    <text x="32" y="91" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11.5">节点服务 (`role=destination`) · HTTPS 上传/接收 (`:24815`)</text>
+
+    <rect x="18" y="116" width="344" height="58" rx="8" fill="#091526" stroke="#1e3658"/>
+    <text x="32" y="138" fill="#38bdf8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">native/windows/GestureLab.cs</text>
+    <text x="32" y="158" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="11.5">左边缘源捕获 · STA OLE `DoDragDrop` · `IDropSourceNotify`</text>
+  </g>
+
+  <!-- Bottom Box: Separate GPL Adapter -->
+  <g transform="translate(40, 268)">
+    <rect x="0" y="0" width="1200" height="72" rx="12" fill="#1c1610" stroke="#d97706" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <rect x="16" y="14" width="290" height="22" rx="6" fill="#33220e" stroke="#f59e0b" stroke-width="1"/>
+    <text x="161" y="29" text-anchor="middle" fill="#fcd34d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700">SEPARATE REPO · GPL-2.0-only + OpenSSL Exception</text>
+    <text x="320" y="30" fill="#fef3c7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">EdgeBridge-Deskflow-Adapter（独立维护的 Deskflow 路由补丁，不含于本 MIT 仓库）</text>
+    <text x="16" y="54" fill="#d6d3d1" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12">
+      通过私有 Unix Socket (`EDGEBRIDGE_ROUTE_SOCKET`) 与 Mac 协调端进程外通信 · 跟踪物理按下 generation、校验反向目标窗口并转发跨屏指针与真实释放
+    </text>
+  </g>
+
+  <!-- IPC Connector Line between macOS Box and GPL Adapter -->
+  <line x1="230" y1="248" x2="230" y2="268" stroke="#f59e0b" stroke-width="2"/>
+  <line x1="1050" y1="248" x2="1050" y2="268" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3 3"/>
+</svg>
