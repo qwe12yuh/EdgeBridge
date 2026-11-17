@@ -1,0 +1,16 @@
+node_modules/
+build/
+.state/
+*.pem
+*.key
+*.log
+*.local.json
+
+.DS_Store
+dist/
+*.zip
+*.exe
+*.pfx
+*.p12
+.env
+.env.*

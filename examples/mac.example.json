@@ -1,0 +1,14 @@
+{
+  "role": "source",
+  "realFiles": true,
+  "macName": "mac-peer",
+  "target": "windows-peer",
+  "nativeIPC": "/private/runtime/native",
+  "routeSocket": "/private/runtime/route.sock",
+  "peerHost": "127.0.0.1",
+  "peerPort": 24813,
+  "peerCertificate": "/private/runtime/windows-control-cert.pem",
+  "peerToken": "REPLACE_WITH_A_PRIVATE_PAIRING_TOKEN",
+  "uploadReceiver": "/private/runtime/upload/receiver.local.json",
+  "uploadPeer": "/private/runtime/windows-upload-peer.local.json"
+}

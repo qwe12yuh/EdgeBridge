@@ -1,0 +1,40 @@
+name: checks
+on: [push, pull_request]
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+  macos-native:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p build && swiftc native/macos/main.swift -o build/edgebridge-native-mac
+      - run: build/edgebridge-native-mac --check LICENSE
+      - run: build/edgebridge-native-mac --self-test
+      - run: swiftc native/macos/GestureLab.swift -o build/edgebridge-gesture-mac
+      - run: build/edgebridge-gesture-mac --self-test
+      - run: swiftc native/macos/CoreLabLauncher.swift -o build/edgebridge-router-launcher
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll /out:build\edgebridge-native-win.exe native\windows\NativeDrag.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\build\edgebridge-native-win.exe --check LICENSE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\build\edgebridge-native-win.exe --self-test
+          exit $LASTEXITCODE
+
+      - shell: pwsh
+        run: |
+          .\scripts\build-gesture-lab-windows.ps1
+          .\build\edgebridge-gesture-lab-win.exe --self-test
+          exit $LASTEXITCODE

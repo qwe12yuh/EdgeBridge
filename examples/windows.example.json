@@ -1,0 +1,12 @@
+{
+  "role": "destination",
+  "realFiles": true,
+  "bind": "127.0.0.1",
+  "port": 24813,
+  "certificate": "C:\\EdgeBridgeRuntime\\cert.pem",
+  "key": "C:\\EdgeBridgeRuntime\\key.pem",
+  "token": "REPLACE_WITH_A_PRIVATE_PAIRING_TOKEN",
+  "nativeHelper": "C:\\EdgeBridgeRuntime\\edgebridge-gesture-lab-win.exe",
+  "uploadReceiver": "C:\\EdgeBridgeRuntime\\upload\\receiver.local.json",
+  "uploadPeer": "C:\\EdgeBridgeRuntime\\mac-upload-peer.local.json"
+}

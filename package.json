@@ -1,0 +1,23 @@
+{
+  "name": "edgebridge",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "description": "Native cross-screen file drag and drop between macOS and Windows",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/cli.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qwe12yuh/EdgeBridge.git"
+  },
+  "homepage": "https://github.com/qwe12yuh/EdgeBridge#readme",
+  "bugs": {
+    "url": "https://github.com/qwe12yuh/EdgeBridge/issues"
+  }
+}
