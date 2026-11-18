@@ -6,6 +6,11 @@ import ApplicationServices
 let arguments = Array(CommandLine.arguments.dropFirst())
 let ipcDirectory = Bundle.main.object(forInfoDictionaryKey: "EdgeBridgeIPC") as? String
 let runtimeIPC = ipcDirectory ?? ""
+if arguments == ["--request-accessibility"] {
+    let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+    print(AXIsProcessTrustedWithOptions([key: true] as CFDictionary) ? "Accessibility: authorized" : "Accessibility: pending")
+    exit(0)
+}
 let marker: UInt64 = 0x45424745
 struct HeartbeatLease {
     var lastGood: TimeInterval
@@ -336,10 +341,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var candidateUntil: TimeInterval = 0
     var candidateSeq: Double = 0
     var wasArmed = false
+    var sourceEdge = "right"
+    func sourceRect(_ frame: NSRect, _ edge: String) -> NSRect {
+        NSRect(x: edge == "right" ? frame.maxX - 12 : frame.minX,
+               y: frame.minY, width: 12, height: frame.height)
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let screen = NSScreen.screens.first else { NSApp.terminate(nil); return }
         let frame = screen.frame
-        let rect = NSRect(x: frame.maxX - 12, y: frame.minY, width: 12, height: frame.height)
+        let rect = sourceRect(frame, sourceEdge)
         panel = NSPanel(contentRect: rect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu; panel.isOpaque = false
         panel.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.04)
@@ -435,7 +445,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if message["command"] as? String == "candidate", let generation = message["generation"] as? UInt32,
                let seq = message["seq"] as? Double, seq > candidateSeq,
                let time = message["time"] as? Double, abs(Date().timeIntervalSince1970 * 1000 - time) < 500,
-               let leaseMs = message["leaseMs"] as? Double, leaseMs > 0, leaseMs <= 500 {
+               let leaseMs = message["leaseMs"] as? Double, leaseMs > 0, leaseMs <= 500,
+               let edge = message["edge"] as? String, edge == "left" || edge == "right" {
+                if edge != sourceEdge {
+                    guard capture.session == nil, reverseIncoming == nil, let screen = NSScreen.screens.first else { continue }
+                    panel.ignoresMouseEvents = true
+                    panel.setFrame(sourceRect(screen.frame, edge), display: false)
+                    sourceEdge = edge
+                }
                 candidateSeq = seq; capture.candidateGeneration = generation
                 candidateUntil = ProcessInfo.processInfo.systemUptime + leaseMs / 1000
                 capture.candidateDeadline = candidateUntil

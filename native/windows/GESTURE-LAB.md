@@ -55,7 +55,7 @@ References: [QueryContinueDrag](https://learn.microsoft.com/en-us/windows/win32/
 
 The same process retains the v6 receiver and adds a Windows source edge. This is still the pre-staged-file experiment: obtaining actual Explorer paths does not itself transfer their contents to Mac.
 
-The new source edge is a 12px, no-activate, tool window on the primary display's left edge. It starts hidden and click-through. It can participate in hit testing only during a short authoritative candidate lease, and never while an incoming destination session is prepared/running. An active source capture likewise rejects destination preparation.
+The source edge is a 12px, no-activate tool window on the primary display. It defaults to the left and follows the validated router candidate when a mirrored layout is used. It starts hidden and click-through. It can participate in hit testing only during a short authoritative candidate lease, and never while an incoming destination session is prepared/running. An active source capture likewise rejects destination preparation.
 
 Additional stdin messages:
 

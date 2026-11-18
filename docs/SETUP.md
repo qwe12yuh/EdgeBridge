@@ -10,7 +10,7 @@
 - Windows：.NET Framework 4.x C# 编译器。
 - 跨屏手势依赖独立 GPL Deskflow 适配器，按其 README 构建。原版安装与配置应保留，原版 core 与实验 core 不同时运行。
 
-本轮验证的布局为 **Mac 在左、Windows 在右，实体键鼠连接 Mac**。目前的边缘原生窗口也是 Mac 右侧与 Windows 左侧；其他布局需要相应修改窗口和路由设置。
+已人工验证的布局为 **Mac 在左、Windows 在右，实体键鼠连接 Mac**。要镜像排列，请同时更新协调器、双端原生程序与 Deskflow 路由适配器，再按[本地控制台](DASHBOARD.md)的说明选择位置。Mac 仍负责键鼠路由。
 
 ## 构建原生程序
 

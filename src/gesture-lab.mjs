@@ -158,6 +158,9 @@ if (config.role === 'destination') {
   server.on('error', error => { log({ event: 'control-error', error: error.message }); stop(); });
   server.listen(config.port, config.bind || '127.0.0.1', () => log({ event: 'destination-ready', port: server.address().port, mode: realFiles ? 'verified-file-transfer' : 'pre-positioned-fixture' }));
 } else if (config.role === 'source') {
+  const macEdge = process.env.EDGEBRIDGE_MAC_EDGE ?? config.macEdge ?? 'right';
+  if (macEdge !== 'left' && macEdge !== 'right') throw Error('Mac edge must be left or right');
+  const windowsEdge = macEdge === 'right' ? 'left' : 'right';
   let stopping = false, nativePid, heartbeatWriting = false, tickCount = 0;
   await fs.mkdir(config.nativeIPC, { recursive: true, mode: 0o700 });
   let nativeWrites = Promise.resolve();
@@ -183,11 +186,11 @@ if (config.role === 'destination') {
     log({ event: 'bytes-verified', direction: 'mac-to-windows', id: current.id, bytes: meta.bytes });
   };
   forward = new SourceGesture({ route: command => route.send(command), remote: transferForward, native: writeNative,
-    allowSelection: realFiles, validPath: path.isAbsolute, fixture: config.fixture, fixtureHash: sha256, source: config.macName, target: config.target });
+    allowSelection: realFiles, validPath: path.isAbsolute, fixture: config.fixture, fixtureHash: sha256, source: config.macName, target: config.target, edge: macEdge });
   reverse = config.windowsFixture || realFiles ? new SourceGesture({ route: command => route.send(command),
     native: command => link.send({ ...command, command: command.command === 'commit' ? 'source-commit' : 'source-reset' }),
     remote: command => realFiles && command.command === 'prepare' ? link.send({ command: 'transfer-source', id: command.id, generation: command.generation }) : writeNative({ ...command, command: 'incoming-' + command.command, ...(command.command === 'prepare' ? { paths: [config.macIncomingFixture || config.fixture] } : {}) }),
-    fixture: config.windowsFixture, fixtureHash: sha256, source: config.target, target: config.macName, edge: 'left',
+    fixture: config.windowsFixture, fixtureHash: sha256, source: config.target, target: config.macName, edge: windowsEdge,
     normalize: name => path.win32.normalize(name).toLowerCase(), allowSelection: realFiles, validPath: path.win32.isAbsolute,
     requireTargetNotification: false, targetStartAck: true, verifyTargetEnd: true, destinationStart: true }) : undefined;
   const gestures = [forward, ...(reverse ? [reverse] : [])];
@@ -211,7 +214,7 @@ if (config.role === 'destination') {
     await new Promise(resolve => uploads.listen(uploadConfig.port, uploadConfig.bind || '127.0.0.1', resolve));
   }
   for (const gesture of gestures) {
-    const direction = gesture.edge === 'left' ? 'windows-to-mac' : 'mac-to-windows';
+    const direction = gesture === reverse ? 'windows-to-mac' : 'mac-to-windows';
     const cancelTransfer = value => { transfers.get(value.id)?.abort(); transfers.delete(value.id); uploadReady.get(value.id)?.reject(Error('Gesture cancelled')); };
     gesture.on('cancelling', cancelTransfer); gesture.on('result', cancelTransfer);
     gesture.on('drop-released', value => log({ event: 'gesture-drop-released', direction, ...value }));
@@ -229,8 +232,11 @@ if (config.role === 'destination') {
     if (event.event === 'candidate' || event.event === 'candidate-ended') {
       if (!nativePid) return; // do not capture a source drag before the Mac endpoint exists
       const command = { ...event, command: event.event, time: Date.now() }; delete command.event;
-      if (event.source === config.target && event.edge === 'left') void link.send(command).catch(stop);
-      else void writeNative(command).catch(stop);
+      if (event.source === config.target && event.target === config.macName && event.edge === windowsEdge) {
+        void link.send(command).catch(stop);
+      } else if (event.source === config.macName && event.target === config.target && event.edge === macEdge) {
+        void writeNative(command).catch(stop);
+      }
     } else {
       for (const gesture of gestures) gesture.routed(event);
     }
@@ -300,6 +306,6 @@ if (config.role === 'destination') {
         .catch(stop).finally(() => { heartbeatWriting = false; });
     }
   }, 500));
-  log({ event: 'source-coordinator-ready', mode: realFiles ? 'verified-file-transfer' : 'pre-positioned-fixture' });
+  log({ event: 'source-coordinator-ready', macEdge, mode: realFiles ? 'verified-file-transfer' : 'pre-positioned-fixture' });
 } else throw Error('Expected source or destination role');
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop?.());

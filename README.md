@@ -15,6 +15,7 @@
   <a href="#已经做到什么">实测状态</a> ·
   <a href="#工作原理与架构边界">工作原理</a> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="docs/DASHBOARD.md">本地控制台</a> ·
   <a href="#当前限制与已知问题">已知限制</a> ·
   <a href="docs/SETUP.md">双机部署</a> ·
   <a href="VALIDATION.md">验证记录</a> ·
@@ -171,6 +172,7 @@ EdgeBridge/
 | 文档 | 内容说明 |
 | :--- | :--- |
 | **[docs/AGENT-INSTALL.md](docs/AGENT-INSTALL.md)** | 可直接交给本地 Agent 的安装、验收与恢复流程 |
+| **[docs/DASHBOARD.md](docs/DASHBOARD.md)** | 在 Mac 上查看双机连接状态、启动和停止已部署的协同环境 |
 | **[docs/SETUP.md](docs/SETUP.md)** | 双机开发部署、原生程序构建、SSH 隧道与隔离路由接入指南 |
 | **[VALIDATION.md](VALIDATION.md)** | 2026-11-16–17 自动化测试、原生自检与双向 PPT 实机验收详细记录 |
 | **[docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)** | Windows 迟到回执误报、64 MiB 暂存上限及待验收交互清单 |

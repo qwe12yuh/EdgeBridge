@@ -2,6 +2,11 @@
 // Development launcher only. The external Deskflow build retains its own license.
 import AppKit
 import ApplicationServices
+if Array(CommandLine.arguments.dropFirst()) == ["--request-accessibility"] {
+    let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+    print(AXIsProcessTrustedWithOptions([key: true] as CFDictionary) ? "Accessibility: authorized" : "Accessibility: pending")
+    exit(0)
+}
 final class Launcher: NSObject, NSApplicationDelegate {
     var child: Process?
     func applicationDidFinishLaunching(_ notification: Notification) {

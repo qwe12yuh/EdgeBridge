@@ -10,7 +10,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "start": "node src/cli.mjs"
+    "start": "node src/cli.mjs",
+    "dashboard": "node src/dashboard.mjs"
   },
   "repository": {
     "type": "git",

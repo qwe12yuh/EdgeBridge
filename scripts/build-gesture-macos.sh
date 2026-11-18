@@ -8,7 +8,8 @@ swiftc "$project_dir/native/macos/GestureLab.swift" -o "$app_dir/Contents/MacOS/
 python3 - "$app_dir" "${EDGE_BRIDGE_IPC:-}" <<'PY'
 import sys,plistlib,pathlib
 app=pathlib.Path(sys.argv[1])
-info={'CFBundleIdentifier':'dev.edgebridge.gesture-lab','CFBundleName':'EdgeBridge Gesture Lab','CFBundleExecutable':'EdgeBridgeGestureLab','CFBundlePackageType':'APPL','LSUIElement':True,'CFBundleVersion':'1'}
+import os
+info={'CFBundleIdentifier':os.environ.get('EDGE_BRIDGE_BUNDLE_ID','dev.edgebridge.gesture-lab'),'CFBundleName':os.environ.get('EDGE_BRIDGE_APP_NAME','EdgeBridge Gesture Lab'),'CFBundleExecutable':'EdgeBridgeGestureLab','CFBundlePackageType':'APPL','LSUIElement':True,'CFBundleVersion':'1'}
 if sys.argv[2]: info['EdgeBridgeIPC']=str(pathlib.Path(sys.argv[2]).resolve())
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
