@@ -6,10 +6,10 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 export class SourceGesture extends EventEmitter {
   constructor({ route, native, remote, fixture, fixtureHash, target, source, edge = 'right',
     normalize = path.resolve, requireTargetNotification = true, targetStartAck = false, allowSelection = false,
-    verifyTargetEnd = false, destinationStart = false, validPath = name => path.isAbsolute(name) || path.win32.isAbsolute(name),
+    verifyTargetEnd = false, destinationStart = false, requireSourceWindow = false, validPath = name => path.isAbsolute(name) || path.win32.isAbsolute(name),
     timeout = 2500, finishTimeout = Math.max(timeout * 4, timeout) }) {
     super(); Object.assign(this, { route, native, remote, fixture: fixture ? normalize(fixture) : undefined, fixtureHash, target, sourceName: source, edge,
-      normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, validPath, timeout, finishTimeout });
+      normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, requireSourceWindow, validPath, timeout, finishTimeout });
     this.retired = new Map();
   }
   invoke(fn, command) {
@@ -24,13 +24,15 @@ export class SourceGesture extends EventEmitter {
       if (this.session) { this.invoke(this.native, { command: 'reset', id: event.id }); return; }
       const pathsOK = Array.isArray(event.paths) && event.paths.length > 0 && event.paths.length <= 1000 && event.paths.every(name => typeof name === 'string' && !name.includes('\0') && this.validPath(name));
       const selectionOK = pathsOK && (this.allowSelection || (event.paths.length === 1 && this.normalize(event.paths[0]) === this.fixture));
-      if (!uuid.test(event.id) || !selectionOK || !Number.isFinite(event.observedUptimeMs) || !Number.isInteger(event.observedGeneration) || event.observedGeneration < 1) {
+      const windowOK = !this.requireSourceWindow || (typeof event.sourceWindow === 'string' && /^[1-9][0-9]{0,19}$/u.test(event.sourceWindow));
+      if (!uuid.test(event.id) || !selectionOK || !windowOK || !Number.isFinite(event.observedUptimeMs) || !Number.isInteger(event.observedGeneration) || event.observedGeneration < 1) {
         this.invoke(this.native, { command: 'reset', id: event.id });
         this.emit('rejected', { reason: this.allowSelection ? 'Invalid file selection or physical gesture' : 'Lab accepts only the configured pre-positioned fixture' }); return;
       }
       this.session = { id: event.id, phase: 'preparing', lastRouteSeq: 0, observedGeneration: event.observedGeneration, paths: [...event.paths] };
       this.arm();
       this.invoke(this.route, { command: 'prepare', id: event.id, target: this.target, ...(this.sourceName ? { source: this.sourceName } : {}), edge: this.edge,
+        ...(this.requireSourceWindow ? { sourceWindow: event.sourceWindow } : {}),
         observedUptimeMs: event.observedUptimeMs, observedGeneration: event.observedGeneration });
       return;
     }

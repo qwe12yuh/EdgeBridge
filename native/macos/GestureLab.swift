@@ -6,6 +6,7 @@ import ApplicationServices
 let arguments = Array(CommandLine.arguments.dropFirst())
 let ipcDirectory = Bundle.main.object(forInfoDictionaryKey: "EdgeBridgeIPC") as? String
 let runtimeIPC = ipcDirectory ?? ""
+let peerSource = Bundle.main.object(forInfoDictionaryKey: "EdgeBridgePeerSource") as? Bool == true
 if arguments == ["--request-accessibility"] {
     let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
     print(AXIsProcessTrustedWithOptions([key: true] as CFDictionary) ? "Accessibility: authorized" : "Accessibility: pending")
@@ -35,6 +36,7 @@ func emit(_ value: [String: Any]) {
 struct Commit {
     let id: String
     let generation: UInt32
+    let token: String?
     init?(_ message: [String: Any]) {
         guard message["command"] as? String == "commit",
               let id = message["id"] as? String, UUID(uuidString: id) != nil,
@@ -42,6 +44,56 @@ struct Commit {
               number.doubleValue.rounded() == number.doubleValue,
               number.doubleValue > 0, number.doubleValue <= Double(UInt32.max) else { return nil }
         self.id = id; generation = number.uint32Value
+        token = message["commitToken"] as? String
+    }
+}
+struct PeerReleaseLease {
+    let tag: UInt64
+    let window: Int
+    let deadline: TimeInterval
+    var consumed = false
+    mutating func admit(tag: UInt64, sourcePid: Int64, ownPid: Int64, actualWindow: Int, now: TimeInterval) -> Bool {
+        guard !consumed, tag == self.tag, sourcePid == ownPid, actualWindow == window, now <= deadline else { return false }
+        consumed = true
+        return true
+    }
+}
+final class PeerReleaseGate {
+    static let marker: UInt64 = 0x45425055
+    var port: CFMachPort?
+    var runLoopSource: CFRunLoopSource?
+    var lease: PeerReleaseLease?
+    var enabled: Bool { port.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
+    func install() -> Bool {
+        let events = CGEventMask(1) << CGEventType.leftMouseUp.rawValue
+        guard let port = CGEvent.tapCreate(tap: .cgAnnotatedSessionEventTap, place: .headInsertEventTap,
+                  options: .defaultTap, eventsOfInterest: events, callback: { _, kind, event, context in
+            guard let context else { return Unmanaged.passUnretained(event) }
+            return Unmanaged<PeerReleaseGate>.fromOpaque(context).takeUnretainedValue().filter(kind, event)
+        }, userInfo: Unmanaged.passUnretained(self).toOpaque()),
+              let source = CFMachPortCreateRunLoopSource(nil, port, 0) else { return false }
+        self.port = port; runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: port, enable: true)
+        return enabled
+    }
+    func filter(_ kind: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if kind == .tapDisabledByTimeout || kind == .tapDisabledByUserInput {
+            lease = nil
+            return Unmanaged.passUnretained(event)
+        }
+        let tag = UInt64(bitPattern: event.getIntegerValueField(.eventSourceUserData))
+        guard kind == .leftMouseUp, tag >> 32 == Self.marker else { return Unmanaged.passUnretained(event) }
+        let actualWindow = event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)
+        let accepted = lease?.admit(tag: tag, sourcePid: event.getIntegerValueField(.eventSourceUnixProcessID),
+                                    ownPid: Int64(ProcessInfo.processInfo.processIdentifier),
+                                    actualWindow: Int(actualWindow), now: ProcessInfo.processInfo.systemUptime) == true
+        return accepted ? Unmanaged.passUnretained(event) : nil
+    }
+    func close() {
+        lease = nil
+        if let source = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        if let port { CFMachPortInvalidate(port) }
     }
 }
 // A destination event is accepted only for this one permitted receiver/window.
@@ -82,6 +134,12 @@ if arguments == ["--self-test"] {
     precondition(!permit.consume(event: 42, window: 8, tag: 123, now: 9))
     var expired = NativeStartPermit(eventNumber: 42, windowNumber: 8, tag: 123, deadline: 10)
     precondition(!expired.consume(event: 42, window: 8, tag: 123, now: 11))
+    var peerLease = PeerReleaseLease(tag: 44, window: 8, deadline: 10)
+    precondition(!peerLease.admit(tag: 44, sourcePid: 9, ownPid: 7, actualWindow: 8, now: 9))
+    precondition(!peerLease.admit(tag: 44, sourcePid: 7, ownPid: 7, actualWindow: 12, now: 9))
+    precondition(!peerLease.admit(tag: 44, sourcePid: 7, ownPid: 7, actualWindow: 8, now: 11))
+    precondition(peerLease.admit(tag: 44, sourcePid: 7, ownPid: 7, actualWindow: 8, now: 9))
+    precondition(!peerLease.admit(tag: 44, sourcePid: 7, ownPid: 7, actualWindow: 8, now: 9))
     print("PASS: gesture validation, generation marker, heartbeat and one-use local start permit; no UI/input")
     exit(0)
 }
@@ -262,6 +320,7 @@ final class Capture: NSView {
         let observedGeneration: UInt32
         let paths: [String]
         var generation: UInt32?
+        var commitToken: String?
         var accepted = false
     }
     var session: Session?
@@ -269,6 +328,8 @@ final class Capture: NSView {
     var candidateGeneration: UInt32?
     var blockedGeneration: UInt32?
     var candidateDeadline: TimeInterval = 0
+    var peerGate: PeerReleaseGate?
+    var candidateObservation: Double?
     override init(frame: NSRect) { super.init(frame: frame); registerForDraggedTypes([.fileURL]) }
     required init?(coder: NSCoder) { fatalError() }
     override func wantsPeriodicDraggingUpdates() -> Bool { true }
@@ -283,7 +344,7 @@ final class Capture: NSView {
         let value = Session(id: UUID().uuidString, sequence: sender.draggingSequenceNumber, observedGeneration: generation, paths: files.map(\.path))
         session = value; tracking = true
         emit(["event": "source-prepare", "id": value.id, "paths": value.paths, "dragSequence": value.sequence,
-              "observedUptimeMs": ProcessInfo.processInfo.systemUptime * 1000, "observedGeneration": generation])
+              "observedUptimeMs": candidateObservation ?? ProcessInfo.processInfo.systemUptime * 1000, "observedGeneration": generation])
         return .copy
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -306,8 +367,21 @@ final class Capture: NSView {
               let event = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: position, mouseButton: .left) else {
             emit(["event": "source-refused", "id": command.id, "reason": "Original drag no longer targets this edge"]); return
         }
+        let tag: UInt64
+        if peerSource {
+            guard let token = command.token, token.count == 36, UUID(uuidString: token) != nil,
+                  let peerGate, peerGate.enabled, window.windowNumber > 0, (NSEvent.pressedMouseButtons & 1) == 1,
+                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber else {
+                emit(["event": "source-refused", "id": command.id, "reason": "Remote source window or commit lease unavailable"]); reset(); return
+            }
+            tag = (PeerReleaseGate.marker << 32) | UInt64(UInt32.random(in: 1...UInt32.max))
+            peerGate.lease = PeerReleaseLease(tag: tag, window: window.windowNumber,
+                                            deadline: min(candidateDeadline, ProcessInfo.processInfo.systemUptime + 0.15))
+            value.commitToken = token
+        } else {
+            tag = (UInt64(command.generation) << 32) | marker
+        }
         value.generation = command.generation; session = value
-        let tag = (UInt64(command.generation) << 32) | marker
         event.setIntegerValueField(.eventSourceUserData, value: Int64(bitPattern: tag))
         emit(["event": "source-logical-release", "id": value.id, "generation": command.generation])
         // A participating test router must authorize this one tagged event first.
@@ -316,19 +390,22 @@ final class Capture: NSView {
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let session else { return false }
         return tracking && session.sequence == sender.draggingSequenceNumber && session.generation != nil
+            && (!peerSource || peerGate?.lease?.consumed == true)
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard var value = session, tracking, value.sequence == sender.draggingSequenceNumber,
-              value.generation != nil else { return false }
+              value.generation != nil, !peerSource || peerGate?.lease?.consumed == true else { return false }
         value.accepted = true; session = value
         return true // copy-only capture; never move or delete the original files
     }
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
         guard let value = session, value.accepted, let generation = value.generation else { return }
-        emit(["event": "source-accepted", "id": value.id, "generation": generation])
+        var result: [String: Any] = ["event": "source-accepted", "id": value.id, "generation": generation]
+        if let token = value.commitToken { result["commitToken"] = token }
+        emit(result)
         reset()
     }
-    func reset() { if let session { blockedGeneration = session.observedGeneration }; session = nil; tracking = false; window?.ignoresMouseEvents = true }
+    func reset() { if let session { blockedGeneration = session.observedGeneration }; session = nil; tracking = false; peerGate?.lease = nil; window?.ignoresMouseEvents = true }
 }
 
 final class Delegate: NSObject, NSApplicationDelegate {
@@ -356,12 +433,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
         panel.isReleasedWhenClosed = false; panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         capture = Capture(frame: NSRect(origin: .zero, size: rect.size)); panel.contentView = capture
+        if peerSource {
+            let gate = PeerReleaseGate()
+            guard gate.install() else { emit(["event": "source-stopped", "reason": "Could not install scoped remote release tap"]); NSApp.terminate(nil); return }
+            capture.peerGate = gate
+        }
         panel.orderFrontRegardless()
         if let attrs = try? FileManager.default.attributesOfItem(atPath: runtimeIPC + "/commands.jsonl") {
             consumed = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
         }
         emit(["event": "source-ready", "accessibility": AXIsProcessTrusted(), "pid": ProcessInfo.processInfo.processIdentifier,
-              "mode": "gesture-lab-only", "frame": NSStringFromRect(rect)])
+              "mode": "gesture-lab-only", "peerSource": peerSource, "frame": NSStringFromRect(rect)])
         let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in self?.tick() }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common) // includes drag tracking, not only default mode
@@ -447,6 +529,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
                let time = message["time"] as? Double, abs(Date().timeIntervalSince1970 * 1000 - time) < 500,
                let leaseMs = message["leaseMs"] as? Double, leaseMs > 0, leaseMs <= 500,
                let edge = message["edge"] as? String, edge == "left" || edge == "right" {
+                if peerSource {
+                    guard let observed = message["observedUptimeMs"] as? Double, observed.isFinite, observed > 0 else { continue }
+                    capture.candidateObservation = observed
+                }
                 if edge != sourceEdge {
                     guard capture.session == nil, reverseIncoming == nil, let screen = NSScreen.screens.first else { continue }
                     panel.ignoresMouseEvents = true
@@ -464,7 +550,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if let command = Commit(message) { capture.commit(command) }
         }
     }
-    func applicationWillTerminate(_ notification: Notification) { emit(["event": "source-stopped"]); timer?.invalidate(); reverseIncoming?.panel?.orderOut(nil); capture?.reset() }
+    func applicationWillTerminate(_ notification: Notification) { emit(["event": "source-stopped"]); timer?.invalidate(); reverseIncoming?.panel?.orderOut(nil); capture?.reset(); capture?.peerGate?.close() }
 }
 let app = NSApplication.shared
 let delegate = Delegate()

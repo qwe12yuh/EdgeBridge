@@ -11,6 +11,7 @@ app=pathlib.Path(sys.argv[1])
 import os
 info={'CFBundleIdentifier':os.environ.get('EDGE_BRIDGE_BUNDLE_ID','dev.edgebridge.gesture-lab'),'CFBundleName':os.environ.get('EDGE_BRIDGE_APP_NAME','EdgeBridge Gesture Lab'),'CFBundleExecutable':'EdgeBridgeGestureLab','CFBundlePackageType':'APPL','LSUIElement':True,'CFBundleVersion':'1'}
 if sys.argv[2]: info['EdgeBridgeIPC']=str(pathlib.Path(sys.argv[2]).resolve())
+if os.environ.get('EDGE_BRIDGE_PEER_SOURCE') == '1': info['EdgeBridgePeerSource']=True
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
 # Documents may add Finder display metadata; preserve security/provenance attributes.
