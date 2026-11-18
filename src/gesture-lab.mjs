@@ -12,6 +12,8 @@ import { JsonLines } from './json-lines.mjs';
 import { connectControl, createControlServer } from './control-link.mjs';
 import { cleanupStagedBatch, gestureInbox, selectedFiles, sameGesture } from './gesture-files.mjs';
 import { checkConfig, loadReceiverConfig, readConfigJson, resolveFrom } from './config-check.mjs';
+import { PrimaryOle } from './primary-ole.mjs';
+import { peerAppKit } from './peer-appkit.mjs';
 
 if (process.argv[2] === '--check') {
   try {
@@ -40,6 +42,19 @@ const config = {
 };
 const log = value => console.log(JSON.stringify({ ...value, observedAt: new Date().toISOString(), monotonicNs: String(process.hrtime.bigint()) }));
 const logCleanupError = error => log({ event: 'staging-cleanup-error', error: error.message });
+const windowsPrimary = config.role === 'source' && config.experiment === 'windows-windows';
+const macPair = config.experiment === 'macos-macos-source';
+const primaryName = windowsPrimary ? config.primaryName : config.macName;
+const pipePrefix = String.raw`\\.\pipe\edgebridge-`;
+if (config.experiment !== undefined && (!config.realFiles ||
+    !(config.experiment === 'windows-windows' && process.platform === 'win32' || macPair && process.platform === 'darwin'))) {
+  throw Error('The same-system experiment requires its native operating system and verified file transfer');
+}
+if (macPair && !config.nativeIPC) throw Error('Mac peer experiment requires private nativeIPC');
+if (windowsPrimary && (!config.nativeHelper || !primaryName || !config.routeSocket?.startsWith(pipePrefix) ||
+    !/^[a-zA-Z0-9_-]{1,64}$/u.test(config.routeSocket.slice(pipePrefix.length)))) {
+  throw Error('Windows primary requires a native helper, primaryName and a private EdgeBridge named pipe');
+}
 const realFiles = config.realFiles === true;
 const sha256 = realFiles ? undefined : createHash('sha256').update(await fs.readFile(config.fixture)).digest('hex');
 if (!realFiles && sha256 !== config.fixtureHash) throw Error('Configured pre-positioned fixture hash does not match');
@@ -49,9 +64,9 @@ const uploadConfig = config.uploadReceiver ? await loadReceiverConfig(config.upl
 if (realFiles && (!uploadPeer || !uploadConfig)) throw Error('Real-file mode requires a pinned upload peer and receiver configuration');
 let stop = () => { for (const timer of timers) clearInterval(timer); for (const r of resources) { r.destroy?.(); r.kill?.(); r.close?.(); } };
 if (config.role === 'destination') {
-  let link, session, outgoing, sequence = 0, sourceSequence = 0, child, stopping = false;
+  let link, session, outgoing, sequence = 0, sourceSequence = 0, child, appKit, stopping = false, peerNativeReady = false;
   const cert = await fs.readFile(config.certificate), key = await fs.readFile(config.key);
-  const sendNative = command => new Promise((resolve, reject) => {
+  const sendNative = command => macPair ? appKit.send(command) : new Promise((resolve, reject) => {
     if (!child?.stdin.writable) return reject(Error('Native helper unavailable'));
     child.stdin.write(JSON.stringify(command) + '\n', error => error ? reject(error) : resolve());
   });
@@ -60,14 +75,14 @@ if (config.role === 'destination') {
     else { void link?.send({ event: 'ended', id: session.id, generation: session.generation, copied: false, accepted: false, error: 'Upload cancelled before native preparation' }).catch(() => {}); session = undefined; }
     if (outgoing) { outgoing.transfer?.abort(); void sendNative({ command: 'source-reset', id: outgoing.id, generation: outgoing.generation, sourceSeq: ++sourceSequence }).catch(() => {}); }
   };
-  child = spawn(config.nativeHelper, ['--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] }); resources.push(child);
-  child.stdin.on('error', error => { log({ event: 'native-error', error: error.message }); stop(); });
-  child.on('error', error => { log({ event: 'native-error', error: error.message }); stop(); });
-  child.on('exit', () => { if (!stopping) stop(); });
-  const lines = readline.createInterface({ input: child.stdout });
-  lines.on('line', line => {
-    let event; try { event = JSON.parse(line); } catch { return; }
+  function nativeEvent(event) {
     log(event);
+    if (macPair && event.event === 'source-ready') {
+      peerNativeReady = event.accessibility === true && event.peerSource === true;
+      if (!peerNativeReady) { log({ event: 'native-error', error: 'Launch the authorized AppKit peer-source bundle' }); stop(); }
+      return;
+    }
+    if (macPair && event.event === 'source-stopped') { stop(); return; }
     if (typeof event.event === 'string' && event.event.startsWith('source-')) {
       if (event.event === 'source-prepare') { outgoing = { id: event.id, generation: event.observedGeneration, paths: [...event.paths] }; sourceSequence = 0; }
       void link?.send(event).catch(() => cancel());
@@ -81,8 +96,23 @@ if (config.role === 'destination') {
       }
       session = undefined;
     }
-  });
-  const uploads = realFiles ? await gestureInbox(uploadConfig, {
+  }
+  if (macPair) {
+    appKit = await peerAppKit(config.nativeIPC, nativeEvent, error => {
+      log({ event: 'native-error', error: error.message }); stop();
+    });
+    resources.push(appKit);
+  } else {
+    child = spawn(config.nativeHelper, ['--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] }); resources.push(child);
+    child.stdin.on('error', error => { log({ event: 'native-error', error: error.message }); stop(); });
+    child.on('error', error => { log({ event: 'native-error', error: error.message }); stop(); });
+    child.on('exit', () => { if (!stopping) stop(); });
+    readline.createInterface({ input: child.stdout }).on('line', line => {
+      let event; try { event = JSON.parse(line); } catch { return; }
+      nativeEvent(event);
+    });
+  }
+  const uploads = realFiles && !macPair ? await gestureInbox(uploadConfig, {
     activePaths: () => session?.stagedPaths ? [session.stagedPaths] : [],
     onCleanupError: logCleanupError,
     authorized: context => !stopping && sameGesture(context, session) && session.nativePrepared === false,
@@ -106,6 +136,7 @@ if (config.role === 'destination') {
       candidate.on('message', message => {
         if (message.command === 'heartbeat') return;
         if (['candidate', 'candidate-ended'].includes(message.command)) {
+          if (macPair && !peerNativeReady) return;
           void sendNative({ ...message, routeSeq: message.seq }).catch(() => cancel()); return;
         }
         if (['source-commit', 'source-reset'].includes(message.command)) {
@@ -125,7 +156,7 @@ if (config.role === 'destination') {
           return;
         }
         if (message.command === 'upload-prepare') {
-          if (!realFiles || session || outgoing) { void candidate.send({ event: 'transfer-error', id: message.id, generation: message.generation, error: 'Destination busy' }).catch(() => {}); return; }
+          if (macPair || !realFiles || session || outgoing) { void candidate.send({ event: 'transfer-error', id: message.id, generation: message.generation, error: 'Destination unavailable' }).catch(() => {}); return; }
           session = { id: message.id, generation: message.generation, nativePrepared: false }; sequence = 0;
           void candidate.send({ event: 'upload-ready', id: session.id, generation: session.generation }).catch(() => cancel()); return;
         }
@@ -153,18 +184,24 @@ if (config.role === 'destination') {
   stop = () => {
     if (stopping) return; stopping = true; cancel();
     for (const timer of timers) clearInterval(timer);
-    void sendNative({ command: 'shutdown' }).catch(() => {}).finally(() => { child.kill(); link?.stream.destroy(); server.close(); uploads?.closeAllConnections(); uploads?.close(); });
+    void sendNative({ command: 'shutdown' }).catch(() => {}).finally(() => { child?.kill(); appKit?.close(); link?.stream.destroy(); server.close(); uploads?.closeAllConnections(); uploads?.close(); });
   };
   server.on('error', error => { log({ event: 'control-error', error: error.message }); stop(); });
   server.listen(config.port, config.bind || '127.0.0.1', () => log({ event: 'destination-ready', port: server.address().port, mode: realFiles ? 'verified-file-transfer' : 'pre-positioned-fixture' }));
 } else if (config.role === 'source') {
-  const macEdge = process.env.EDGEBRIDGE_MAC_EDGE ?? config.macEdge ?? 'right';
-  if (macEdge !== 'left' && macEdge !== 'right') throw Error('Mac edge must be left or right');
-  const windowsEdge = macEdge === 'right' ? 'left' : 'right';
+  const primaryEdge = (windowsPrimary ? config.primaryEdge : process.env.EDGEBRIDGE_MAC_EDGE ?? config.macEdge) ?? 'right';
+  if (primaryEdge !== 'left' && primaryEdge !== 'right') throw Error('Primary edge must be left or right');
+  const windowsEdge = primaryEdge === 'right' ? 'left' : 'right';
   let stopping = false, nativePid, heartbeatWriting = false, tickCount = 0;
-  await fs.mkdir(config.nativeIPC, { recursive: true, mode: 0o700 });
+  if (!windowsPrimary) await fs.mkdir(config.nativeIPC, { recursive: true, mode: 0o700 });
   let nativeWrites = Promise.resolve();
-  const writeNative = command => (nativeWrites = nativeWrites.catch(() => {}).then(() => fs.appendFile(config.nativeIPC + '/commands.jsonl', JSON.stringify(command) + '\n', { mode: 0o600 })));
+  let helper;
+  const writeNative = command => windowsPrimary ? new Promise((resolve, reject) => {
+    if (!helper?.stdin.writable) return reject(Error('Primary native helper is unavailable'));
+    helper.stdin.write(JSON.stringify(command) + '\n', error => error ? reject(error) : resolve());
+  }) : (nativeWrites = nativeWrites.catch(() => {}).then(() => fs.appendFile(config.nativeIPC + '/commands.jsonl', JSON.stringify(command) + '\n', { mode: 0o600 })));
+  const primaryOle = windowsPrimary ? new PrimaryOle(writeNative) : undefined;
+  const sendLocalTarget = command => primaryOle ? primaryOle.targetCommand(command) : writeNative({ ...command, command: 'incoming-' + command.command });
   const routerSocket = net.createConnection(config.routeSocket); resources.push(routerSocket);
   await once(routerSocket, 'connect');
   const route = new JsonLines(routerSocket);
@@ -185,14 +222,18 @@ if (config.role === 'destination') {
     const meta = await selectedFiles(uploadPeer, current.paths, { gestureId: current.id, generation: current.generation }, { signal: abort.signal });
     log({ event: 'bytes-verified', direction: 'mac-to-windows', id: current.id, bytes: meta.bytes });
   };
-  forward = new SourceGesture({ route: command => route.send(command), remote: transferForward, native: writeNative,
-    allowSelection: realFiles, validPath: path.isAbsolute, fixture: config.fixture, fixtureHash: sha256, source: config.macName, target: config.target, edge: macEdge });
+  forward = new SourceGesture({ route: command => route.send(command), remote: transferForward,
+    native: command => primaryOle ? primaryOle.sourceCommand(command) : writeNative(command),
+    allowSelection: realFiles, validPath: windowsPrimary ? path.win32.isAbsolute : path.isAbsolute,
+    requireSourceWindow: windowsPrimary,
+    fixture: config.fixture, fixtureHash: sha256, source: primaryName, target: config.target, edge: primaryEdge });
   reverse = config.windowsFixture || realFiles ? new SourceGesture({ route: command => route.send(command),
     native: command => link.send({ ...command, command: command.command === 'commit' ? 'source-commit' : 'source-reset' }),
-    remote: command => realFiles && command.command === 'prepare' ? link.send({ command: 'transfer-source', id: command.id, generation: command.generation }) : writeNative({ ...command, command: 'incoming-' + command.command, ...(command.command === 'prepare' ? { paths: [config.macIncomingFixture || config.fixture] } : {}) }),
-    fixture: config.windowsFixture, fixtureHash: sha256, source: config.target, target: config.macName, edge: windowsEdge,
-    normalize: name => path.win32.normalize(name).toLowerCase(), allowSelection: realFiles, validPath: path.win32.isAbsolute,
-    requireTargetNotification: false, targetStartAck: true, verifyTargetEnd: true, destinationStart: true }) : undefined;
+    remote: command => realFiles && command.command === 'prepare' ? link.send({ command: 'transfer-source', id: command.id, generation: command.generation }) : sendLocalTarget({ ...command, ...(command.command === 'prepare' ? { paths: [config.macIncomingFixture || config.fixture] } : {}) }),
+    fixture: config.windowsFixture, fixtureHash: sha256, source: config.target, target: primaryName, edge: windowsEdge,
+    normalize: macPair ? path.posix.normalize : name => path.win32.normalize(name).toLowerCase(),
+    allowSelection: realFiles, validPath: macPair ? path.posix.isAbsolute : path.win32.isAbsolute,
+    requireTargetNotification: windowsPrimary, targetStartAck: !windowsPrimary, verifyTargetEnd: !windowsPrimary, destinationStart: !windowsPrimary }) : undefined;
   const gestures = [forward, ...(reverse ? [reverse] : [])];
   const stagedReverse = new Map();
   const uploads = realFiles ? await gestureInbox(uploadConfig, {
@@ -204,7 +245,7 @@ if (config.role === 'destination') {
       reverse.session.filesReady = true;
       stagedReverse.set(context.gestureId, paths);
       if (stagedReverse.size > 32) stagedReverse.delete(stagedReverse.keys().next().value);
-      await writeNative({ command: 'incoming-prepare', id: context.gestureId, generation: context.generation, paths });
+      await sendLocalTarget({ command: 'prepare', id: context.gestureId, generation: context.generation, paths });
       log({ event: 'bytes-staged', direction: 'windows-to-mac', id: context.gestureId, files: paths.length });
     },
   }) : undefined;
@@ -214,7 +255,8 @@ if (config.role === 'destination') {
     await new Promise(resolve => uploads.listen(uploadConfig.port, uploadConfig.bind || '127.0.0.1', resolve));
   }
   for (const gesture of gestures) {
-    const direction = gesture === reverse ? 'windows-to-mac' : 'mac-to-windows';
+    const direction = windowsPrimary ? (gesture === reverse ? 'secondary-to-primary' : 'primary-to-secondary')
+      : macPair ? 'secondary-to-primary' : (gesture === reverse ? 'windows-to-mac' : 'mac-to-windows');
     const cancelTransfer = value => { transfers.get(value.id)?.abort(); transfers.delete(value.id); uploadReady.get(value.id)?.reject(Error('Gesture cancelled')); };
     gesture.on('cancelling', cancelTransfer); gesture.on('result', cancelTransfer);
     gesture.on('drop-released', value => log({ event: 'gesture-drop-released', direction, ...value }));
@@ -232,10 +274,10 @@ if (config.role === 'destination') {
     if (event.event === 'candidate' || event.event === 'candidate-ended') {
       if (!nativePid) return; // do not capture a source drag before the Mac endpoint exists
       const command = { ...event, command: event.event, time: Date.now() }; delete command.event;
-      if (event.source === config.target && event.target === config.macName && event.edge === windowsEdge) {
+      if (event.source === config.target && event.target === primaryName && event.edge === windowsEdge) {
         void link.send(command).catch(stop);
-      } else if (event.source === config.macName && event.target === config.target && event.edge === macEdge) {
-        void writeNative(command).catch(stop);
+      } else if (!macPair && event.source === primaryName && event.target === config.target && event.edge === primaryEdge) {
+        void Promise.resolve(primaryOle ? primaryOle.sourceCommand(command) : writeNative(command)).catch(stop);
       }
     } else {
       for (const gesture of gestures) gesture.routed(event);
@@ -251,15 +293,48 @@ if (config.role === 'destination') {
   stop = () => {
     if (stopping) return; stopping = true; for (const gesture of gestures) gesture.cancel();
     for (const timer of timers) clearInterval(timer);
-    void writeNative({ command: 'shutdown' }).catch(() => {}).finally(() => { routerSocket.destroy(); link.stream.destroy(); uploads?.closeAllConnections(); uploads?.close(); });
+    void writeNative({ command: 'shutdown' }).catch(() => {}).finally(() => {
+      helper?.stdin.end();
+      routerSocket.destroy(); link.stream.destroy(); uploads?.closeAllConnections(); uploads?.close();
+    });
   };
   for (const connection of [route, link]) {
     connection.on('failure', error => { log({ event: 'control-error', error: error.message }); stop(); });
     connection.on('closed', stop);
   }
-  let offset = (await fs.stat(config.nativeIPC + '/events.jsonl').catch(() => ({ size: 0 }))).size;
+  function localEvent(event) {
+    log({ component: 'source-native', ...event });
+    primaryOle?.observe(event);
+    if (windowsPrimary && event.event === 'ready') nativePid = helper.pid;
+    if (event.event === 'source-ready') {
+      nativePid = event.pid;
+      if (event.accessibility !== true) { log({ event: 'native-error', error: 'Source helper is not Accessibility-authorized' }); stop(); }
+    }
+    if (event.event === 'source-stopped') stop();
+    if (typeof event.event === 'string' && event.event.startsWith('source-')) sourceEvent(forward, reverse, event);
+    else {
+      if (event.event === 'ended' && typeof event.id === 'string') {
+        const stagedPaths = stagedReverse.get(event.id);
+        stagedReverse.delete(event.id);
+        if (stagedPaths && event.copied === false && event.accepted === false && uploadConfig?.inbox) {
+          void cleanupStagedBatch(uploadConfig.inbox, stagedPaths, { onError: logCleanupError });
+        }
+      }
+      reverse?.received(event);
+    }
+  }
+  if (windowsPrimary) {
+    helper = spawn(config.nativeHelper, ['--stdio'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    helper.stdin.on('error', stop);
+    helper.on('error', error => { log({ event: 'native-error', error: error.message }); stop(); });
+    helper.on('exit', stop);
+    readline.createInterface({ input: helper.stdout }).on('line', line => {
+      try { localEvent(JSON.parse(line)); } catch { stop(); }
+    });
+  }
+  let offset = windowsPrimary ? 0 : (await fs.stat(config.nativeIPC + '/events.jsonl').catch(() => ({ size: 0 }))).size;
   let pending = Buffer.alloc(0), reading = false;
-  timers.push(setInterval(async () => {
+  if (!windowsPrimary) timers.push(setInterval(async () => {
     if (reading || stopping) return; reading = true;
     let file;
     try {
@@ -270,23 +345,7 @@ if (config.role === 'destination') {
       if (pending.length > 131072) throw Error('Native event frame too large');
       while (pending.includes(10)) {
         const end = pending.indexOf(10), line = pending.subarray(0, end); pending = pending.subarray(end + 1);
-        const event = JSON.parse(line.toString('utf8')); log({ component: 'source-native', ...event });
-        if (event.event === 'source-ready') {
-          nativePid = event.pid;
-          if (event.accessibility !== true) { log({ event: 'native-error', error: 'Source helper is not Accessibility-authorized' }); stop(); }
-        }
-        if (event.event === 'source-stopped') stop();
-        if (typeof event.event === 'string' && event.event.startsWith('source-')) sourceEvent(forward, reverse, event);
-        else {
-          if (event.event === 'ended' && typeof event.id === 'string') {
-            const stagedPaths = stagedReverse.get(event.id);
-            stagedReverse.delete(event.id);
-            if (stagedPaths && event.copied === false && event.accepted === false && uploadConfig?.inbox) {
-              void cleanupStagedBatch(uploadConfig.inbox, stagedPaths, { onError: logCleanupError });
-            }
-          }
-          reverse?.received(event);
-        }
+        localEvent(JSON.parse(line.toString('utf8')));
       }
     } catch (error) { if (error.code !== 'ENOENT') { log({ event: 'native-error', error: error.message }); stop(); } }
     finally { await file?.close(); reading = false; }
@@ -299,13 +358,15 @@ if (config.role === 'destination') {
     void route.send({ command: 'heartbeat' }).catch(stop);
     if (++tickCount % 4 === 0 && !gestures.some(gesture => gesture.session)) void route.send({ command: 'status' }).catch(stop);
     void link.send({ command: 'heartbeat' }).catch(stop);
-    if (!heartbeatWriting) {
+    if (primaryOle) void Promise.resolve(primaryOle.heartbeat()).catch(stop);
+    else if (!heartbeatWriting) {
       heartbeatWriting = true;
       const temporary = config.nativeIPC + '/.heartbeat-' + process.pid;
       void fs.writeFile(temporary, String(Date.now()), { mode: 0o600 }).then(() => fs.rename(temporary, config.nativeIPC + '/heartbeat'))
         .catch(stop).finally(() => { heartbeatWriting = false; });
     }
   }, 500));
-  log({ event: 'source-coordinator-ready', macEdge, mode: realFiles ? 'verified-file-transfer' : 'pre-positioned-fixture' });
+  log({ event: 'source-coordinator-ready', ...(windowsPrimary ? { primaryEdge, experiment: config.experiment } : { macEdge: primaryEdge }),
+    mode: realFiles ? 'verified-file-transfer' : 'pre-positioned-fixture' });
 } else throw Error('Expected source or destination role');
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop?.());

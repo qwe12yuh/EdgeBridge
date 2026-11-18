@@ -95,6 +95,8 @@ sequenceDiagram
 
 ## 快速开始
 
+两台 Mac 或两台 Windows 的配对、传输与尚待实测的手势路径见[同系统双机实验](docs/SAME-OS.md)。
+
 用 Codex、Claude Code 或其他能操作终端的本地 Agent 安装时，复制这条指令给它：
 
 ```text

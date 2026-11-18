@@ -75,14 +75,17 @@ export async function checkConfig(configPath, visited = new Set()) {
   visited.add(resolved);
 
   if (config.role === 'source') {
-    for (const key of ['macName', 'target', 'nativeIPC', 'routeSocket', 'peerPort', 'peerCertificate', 'peerToken']) {
+    const windowsPrimary = config.experiment === 'windows-windows';
+    for (const key of [windowsPrimary ? 'primaryName' : 'macName', windowsPrimary ? 'nativeHelper' : 'nativeIPC',
+      'target', 'routeSocket', 'peerPort', 'peerCertificate', 'peerToken']) {
       if (!config[key]) throw Error(`Source configuration missing required field: ${key}`);
     }
     if (!validPort(config.peerPort)) throw Error('Source peerPort must be an integer in 1..65535');
     if (!validToken(config.peerToken)) throw Error('Source peerToken must be at least 32 characters and not a placeholder');
     const peerCert = await checkCertFile(resolveFrom(baseDir, config.peerCertificate), 'Source peerCertificate');
     const details = { kind: 'gesture-source', mode: config.realFiles === true ? 'verified-file-transfer' : 'pre-positioned-fixture',
-      macName: config.macName, target: config.target, peerPort: config.peerPort, peerFingerprint256: peerCert.fingerprint256 };
+      ...(windowsPrimary ? { primaryName: config.primaryName } : { macName: config.macName }),
+      target: config.target, peerPort: config.peerPort, peerFingerprint256: peerCert.fingerprint256 };
     if (config.realFiles === true) {
       if (!config.uploadReceiver || !config.uploadPeer) throw Error('Real-file source configuration requires uploadReceiver and uploadPeer');
       details.uploadReceiver = await checkConfig(resolveFrom(baseDir, config.uploadReceiver), new Set(visited));
@@ -94,7 +97,7 @@ export async function checkConfig(configPath, visited = new Set()) {
   }
 
   if (config.role === 'destination') {
-    for (const key of ['port', 'certificate', 'key', 'token', 'nativeHelper']) {
+    for (const key of ['port', 'certificate', 'key', 'token', config.experiment === 'macos-macos-source' ? 'nativeIPC' : 'nativeHelper']) {
       if (!config[key]) throw Error(`Destination configuration missing required field: ${key}`);
     }
     if (!validPort(config.port)) throw Error('Destination port must be an integer in 1..65535');

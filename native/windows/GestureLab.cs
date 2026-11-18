@@ -189,7 +189,7 @@ class GestureLab {
                 lock(machine.gate){if(machine.session!=null||machine.stopping){e.Effect=DragDropEffects.None;return;}state.Enter();sourceBusy=true;}
                 paths=selected;e.Effect=DragDropEffects.Copy;
                 Emit(new {@event="source-entered",id=state.id,generation=state.generation,routeSeq=state.routeSeq});
-                Emit(new {@event="source-prepare",id=state.id,generation=state.generation,observedGeneration=state.generation,observedUptimeMs=state.observedUptimeMs,routeSeq=state.routeSeq,paths=paths});
+                Emit(new {@event="source-prepare",id=state.id,generation=state.generation,observedGeneration=state.generation,observedUptimeMs=state.observedUptimeMs,routeSeq=state.routeSeq,sourceWindow=unchecked((ulong)Handle.ToInt64()).ToString(System.Globalization.CultureInfo.InvariantCulture),paths=paths});
             };
             DragOver+=delegate(object sender,DragEventArgs e){e.Effect=Armed&&state.hit&&state.id!=null?DragDropEffects.Copy:DragDropEffects.None;};
             DragLeave+=delegate {if(!accepted)Reset("left-edge",true);};
@@ -248,9 +248,10 @@ class GestureLab {
             if(String.IsNullOrEmpty(token)||token.Length<16||token.Length>128)throw new ArgumentException("Invalid source commit token");
             foreach(char c in token)if(c<33||c>126)throw new ArgumentException("Invalid source commit token");
             state.Check(id,generation,sequence,true);state.commitToken=token;
-            // Deliberately local Windows logical release. Physical authority remains the Mac router.
-            // Only the live copy-only OLE edge context above is allowed to trigger this call.
-            mouse_event(4,0,0,0,new UIntPtr(0x45424745));
+            ulong marker=0x45424745;
+            uint routeTag;
+            if(UIntPtr.Size==8&&UInt32.TryParse(token.Substring(0,8),System.Globalization.NumberStyles.HexNumber,System.Globalization.CultureInfo.InvariantCulture,out routeTag))marker|=((ulong)routeTag)<<32;
+            mouse_event(4,0,0,0,new UIntPtr(marker));
         }
         protected override void Dispose(bool disposing){if(disposing){watch.Stop();watch.Dispose();}base.Dispose(disposing);}
     }
