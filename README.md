@@ -21,6 +21,11 @@
   <a href="#许可证与组件边界">许可证边界</a>
 </p>
 
+<p align="center">
+  <a href="docs/AGENT-INSTALL.md"><strong>⚡ Agent 一键安装入口</strong></a>
+  · <a href="https://raw.githubusercontent.com/qwe12yuh/EdgeBridge/main/docs/AGENT-INSTALL.md">复制给 Agent 的安装链接</a>
+</p>
+
 ---
 
 ## 解决什么问题
@@ -88,6 +93,14 @@ sequenceDiagram
 ---
 
 ## 快速开始
+
+用 Codex、Claude Code 或其他能操作终端的本地 Agent 安装时，复制这条指令给它：
+
+```text
+请在我的 Mac 和 Windows 上安装并验证 EdgeBridge。按这份指南执行：https://raw.githubusercontent.com/qwe12yuh/EdgeBridge/main/docs/AGENT-INSTALL.md
+```
+
+Agent 可以接手构建、配对和预检；切换正在使用的 Deskflow、授予 macOS 辅助功能权限以及最后的跨屏拖放验收，仍需要你参与。也可以按下文手动部署。
 
 ### 1. 单机验证传输层（无需双机与适配器）
 
@@ -157,6 +170,7 @@ EdgeBridge/
 
 | 文档 | 内容说明 |
 | :--- | :--- |
+| **[docs/AGENT-INSTALL.md](docs/AGENT-INSTALL.md)** | 可直接交给本地 Agent 的安装、验收与恢复流程 |
 | **[docs/SETUP.md](docs/SETUP.md)** | 双机开发部署、原生程序构建、SSH 隧道与隔离路由接入指南 |
 | **[VALIDATION.md](VALIDATION.md)** | 2026-11-16–17 自动化测试、原生自检与双向 PPT 实机验收详细记录 |
 | **[docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md)** | Windows 迟到回执误报、64 MiB 暂存上限及待验收交互清单 |
