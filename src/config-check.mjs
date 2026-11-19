@@ -73,6 +73,9 @@ export async function checkConfig(configPath, visited = new Set()) {
   const { resolved, baseDir, config } = await readConfigJson(configPath, 'Configuration');
   if (visited.has(resolved)) throw Error(`Circular configuration reference detected: ${resolved}`);
   visited.add(resolved);
+  if (config.stagingTimeoutMs !== undefined && (!Number.isInteger(config.stagingTimeoutMs) || config.stagingTimeoutMs < 1 || config.stagingTimeoutMs > 4800)) {
+    throw Error("stagingTimeoutMs must be a positive integer ≤ 4800, below the router's 5 s prepare deadline");
+  }
 
   if (config.role === 'source') {
     for (const key of ['macName', 'target', 'nativeIPC', 'routeSocket', 'peerPort', 'peerCertificate', 'peerToken']) {

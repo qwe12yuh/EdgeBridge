@@ -183,11 +183,11 @@ if (config.role === 'destination') {
     log({ event: 'bytes-verified', direction: 'mac-to-windows', id: current.id, bytes: meta.bytes });
   };
   forward = new SourceGesture({ route: command => route.send(command), remote: transferForward, native: writeNative,
-    allowSelection: realFiles, validPath: path.isAbsolute, fixture: config.fixture, fixtureHash: sha256, source: config.macName, target: config.target });
+    stagingTimeout: config.stagingTimeoutMs, allowSelection: realFiles, validPath: path.isAbsolute, fixture: config.fixture, fixtureHash: sha256, source: config.macName, target: config.target });
   reverse = config.windowsFixture || realFiles ? new SourceGesture({ route: command => route.send(command),
     native: command => link.send({ ...command, command: command.command === 'commit' ? 'source-commit' : 'source-reset' }),
     remote: command => realFiles && command.command === 'prepare' ? link.send({ command: 'transfer-source', id: command.id, generation: command.generation }) : writeNative({ ...command, command: 'incoming-' + command.command, ...(command.command === 'prepare' ? { paths: [config.macIncomingFixture || config.fixture] } : {}) }),
-    fixture: config.windowsFixture, fixtureHash: sha256, source: config.target, target: config.macName, edge: 'left',
+    stagingTimeout: config.stagingTimeoutMs, fixture: config.windowsFixture, fixtureHash: sha256, source: config.target, target: config.macName, edge: 'left',
     normalize: name => path.win32.normalize(name).toLowerCase(), allowSelection: realFiles, validPath: path.win32.isAbsolute,
     requireTargetNotification: false, targetStartAck: true, verifyTargetEnd: true, destinationStart: true }) : undefined;
   const gestures = [forward, ...(reverse ? [reverse] : [])];

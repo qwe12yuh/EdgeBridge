@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Separate staging deadline (4500ms default, configurable below the router's 5s prepare limit).
+- Hash gesture uploads while streaming, without a second file read; verify HTTP SHA-256 trailers.
+- Map nonportable filenames and deduplicate selection names without changing source paths.
+
 ## 0.1.0-alpha.1 — 2026-11-17
 
 First source preview.

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import https from 'node:https';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { collect, validateManifest, safeRelative } from '../src/files.mjs';
@@ -71,6 +72,42 @@ test('TLS transfer verifies bytes, retains sources and refuses invalid peers/upl
     await assert.rejects(request(peer, `/session/${id}/commit`, { body: {} }), /Incomplete/u);
     assert.equal(events.length, 2);
   });
+  await t.test('deferred hashes stream successfully including empty files', async () => {
+    const deferred = await collect([source], { prehash: false });
+    assert.ok(deferred.entries.every(entry => !('sha256' in entry)));
+    const result = await send(peer, deferred);
+    assert.deepEqual(await fs.readFile(path.join(result.paths[0], '随机.bin')), content);
+    assert.equal((await fs.stat(path.join(result.paths[0], '空.txt'))).size, 0);
+  });
+  await t.test('missing, malformed and wrong trailers cannot publish deferred uploads', async () => {
+    const upload = (id, trailer) => new Promise((resolve, reject) => {
+      const req = https.request(new URL(`/session/${id}/file/0`, peer.baseURL), {
+        method: 'POST', ca: cert, checkServerIdentity: () => undefined,
+        headers: { Authorization: `Bearer ${token}`, ...(trailer === undefined ? {} : { Trailer: 'x-edgebridge-sha256' }) },
+      }, res => {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks)) }));
+      });
+      req.on('error', reject);
+      req.write('');
+      if (trailer !== undefined) req.addTrailers({ 'x-edgebridge-sha256': trailer });
+      req.end();
+    });
+    for (const sha256 of [undefined, manifest.entries.find(e => e.kind === 'file').sha256]) {
+      for (const trailer of [undefined, 'bad', '0'.repeat(64)]) {
+        if (sha256 !== undefined && trailer === undefined) continue;
+        const entries = [{ name: 'empty.txt', kind: 'file', size: 0, ...(sha256 === undefined ? {} : { sha256 }) }];
+        const { id } = await request(peer, '/offer', { body: { entries } });
+        assert.deepEqual(await upload(id, trailer), { status: 400, body: { error: 'Integrity mismatch' } });
+        await assert.rejects(request(peer, `/session/${id}/commit`, { body: {} }), /Incomplete/u);
+      }
+    }
+    const entries = [{ ...manifest.entries.find(e => e.kind === 'file'), name: 'empty.txt' }];
+    const { id } = await request(peer, '/offer', { body: { entries } });
+    assert.deepEqual(await upload(id), { status: 200, body: { verified: true } });
+    await request(peer, `/session/${id}/commit`, { body: {} });
+  });
   await t.test('file transport success is not reported as a successful native drop', async () => {
     nativeResult = { copied: false, error: 'native drag cancelled' };
     const failedDrop = await send(peer, manifest);
@@ -133,6 +170,17 @@ test('TLS transfer verifies bytes, retains sources and refuses invalid peers/upl
     const macCheck = spawnSync(process.execPath, ['src/gesture-lab.mjs', '--check', path.join(labDir, 'mac', 'mac.local.json')], { encoding: 'utf8' });
     assert.equal(macCheck.status, 0, macCheck.stderr);
     assert.equal(JSON.parse(macCheck.stdout).kind, 'gesture-source');
+    const macConfigPath = path.join(labDir, 'mac', 'mac.local.json');
+    const macConfig = JSON.parse(await fs.readFile(macConfigPath, 'utf8'));
+    for (const stagingTimeoutMs of [1, 4500, 4800]) {
+      await fs.writeFile(macConfigPath, JSON.stringify({ ...macConfig, stagingTimeoutMs }));
+      assert.equal((await checkConfig(macConfigPath)).kind, 'gesture-source');
+    }
+    for (const stagingTimeoutMs of [0, -1, 4801, 1.5, '4500', null]) {
+      await fs.writeFile(macConfigPath, JSON.stringify({ ...macConfig, stagingTimeoutMs }));
+      await assert.rejects(checkConfig(macConfigPath), /router's 5 s prepare deadline/u);
+    }
+    await fs.writeFile(macConfigPath, JSON.stringify(macConfig));
     const winCheck = spawnSync(process.execPath, ['src/gesture-lab.mjs', '--check', path.join(labDir, 'windows', 'windows.local.json')], { encoding: 'utf8' });
     assert.equal(winCheck.status, 0, winCheck.stderr);
     assert.equal(JSON.parse(winCheck.stdout).kind, 'gesture-destination');

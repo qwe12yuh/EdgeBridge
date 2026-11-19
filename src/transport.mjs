@@ -81,7 +81,10 @@ export async function createReceiver({ cert, key, token, inbox, onReceived = () 
           hash.update(chunk); next(null, chunk);
         } });
         await pipeline(req, guard, createWriteStream(tmp, { flags: 'wx', mode: 0o600 }));
-        if (count !== e.size || hash.digest('hex') !== e.sha256) throw Error('Integrity mismatch');
+        const digest = hash.digest('hex'), trailer = req.trailers['x-edgebridge-sha256'];
+        if (count !== e.size || (e.sha256 !== undefined && digest !== e.sha256) ||
+            ((e.sha256 === undefined || trailer !== undefined) &&
+              (typeof trailer !== 'string' || !/^[a-f0-9]{64}$/iu.test(trailer) || trailer.toLowerCase() !== digest))) throw Error('Integrity mismatch');
         await fs.link(tmp, target); // atomic publication; never replace an existing destination
         s.complete.add(i);
         return reply(200, { verified: true });
@@ -111,7 +114,8 @@ export function request({ baseURL, certificate, token }, route, { body, file, si
       signal,
       method: route === '/health' ? 'GET' : 'POST', ca: certificate, minVersion: 'TLSv1.3',
       checkServerIdentity: (_hostname, cert) => cert.fingerprint256 === expected ? undefined : Error('Certificate pin mismatch'),
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': file ? 'application/octet-stream' : 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': file ? 'application/octet-stream' : 'application/json',
+        ...(file ? { Trailer: 'x-edgebridge-sha256' } : {}) },
     }, res => {
       let bytes = 0; const chunks = [];
       res.on('data', c => { bytes += c.length; if (bytes > 512 * 1024) res.destroy(Error('Response too large')); else chunks.push(c); });
@@ -122,7 +126,14 @@ export function request({ baseURL, certificate, token }, route, { body, file, si
     });
     req.on('error', reject);
     req.setTimeout(120000, () => req.destroy(Error('Transfer timed out')));
-    if (file) pipeline(createReadStream(file), req).catch(reject);
+    if (file) {
+      const hash = createHash('sha256');
+      const hashing = new Transform({
+        transform(chunk, encoding, next) { hash.update(chunk); next(null, chunk); },
+        flush(next) { req.addTrailers({ 'x-edgebridge-sha256': hash.digest('hex') }); next(); },
+      });
+      pipeline(createReadStream(file), hashing, req).catch(reject);
+    }
     else req.end(body ? JSON.stringify(body) : undefined);
   });
 }
