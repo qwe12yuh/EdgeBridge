@@ -7,9 +7,9 @@ export class SourceGesture extends EventEmitter {
   constructor({ route, native, remote, fixture, fixtureHash, target, source, edge = 'right',
     normalize = path.resolve, requireTargetNotification = true, targetStartAck = false, allowSelection = false,
     verifyTargetEnd = false, destinationStart = false, validPath = name => path.isAbsolute(name) || path.win32.isAbsolute(name),
-    timeout = 2500, finishTimeout = Math.max(timeout * 4, timeout) }) {
+    timeout = 2500, stagingTimeout = 4500, finishTimeout = Math.max(timeout * 4, timeout) }) {
     super(); Object.assign(this, { route, native, remote, fixture: fixture ? normalize(fixture) : undefined, fixtureHash, target, sourceName: source, edge,
-      normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, validPath, timeout, finishTimeout });
+      normalize, requireTargetNotification, targetStartAck, allowSelection, verifyTargetEnd, destinationStart, validPath, timeout, stagingTimeout, finishTimeout });
     this.retired = new Map();
   }
   invoke(fn, command) {
@@ -55,7 +55,7 @@ export class SourceGesture extends EventEmitter {
     if (!Number.isSafeInteger(event.seq) || event.seq <= s.lastRouteSeq) return;
     if (event.event === 'prepared' && s.phase === 'preparing') {
       if (!Number.isInteger(event.generation) || event.generation < 1 || event.generation > 0xffffffff || event.generation !== s.observedGeneration) { this.cancel('Invalid physical gesture generation'); return; }
-      s.generation = event.generation; s.lastRouteSeq = event.seq; s.phase = 'preparing-target'; this.arm();
+      s.generation = event.generation; s.lastRouteSeq = event.seq; s.phase = 'preparing-target'; this.arm(this.stagingTimeout);
       this.invoke(this.remote, { command: 'prepare', id: s.id, generation: s.generation, fixtureHash: this.fixtureHash });
       return;
     }

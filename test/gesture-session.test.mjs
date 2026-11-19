@@ -4,11 +4,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SourceGesture } from '../src/gesture-session.mjs';
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function setup(t) {
+function setup(t, options = {}) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const route = [], native = [], remote = [], results = [];
   const g = new SourceGesture({ route: c => route.push(c), native: c => native.push(c), remote: c => remote.push(c),
-    fixture: '/lab/fixture.txt', fixtureHash: 'a'.repeat(64), target: 'win', timeout: 100 });
+    fixture: '/lab/fixture.txt', fixtureHash: 'a'.repeat(64), target: 'win', timeout: 100, ...options });
   g.on('result', result => results.push(result));
   t.after(() => { g.cancel(); t.mock.timers.tick(100); });
   const id = randomUUID(), generation = 7;
@@ -27,6 +27,27 @@ function setup(t) {
   };
   return { g, id, generation, route, native, remote, results, source, routed, received, prepare, enter };
 }
+test('staging can take three seconds without extending other phase deadlines', async t => {
+  const c = setup(t);
+  c.source({ event: 'source-prepare', paths: ['/lab/fixture.txt'], observedUptimeMs: 12345 });
+  c.routed({ event: 'prepared', seq: 1 }); await flush();
+  t.mock.timers.tick(3000); await flush();
+  assert.equal(c.g.session.phase, 'preparing-target');
+  c.received({ event: 'prepared' }); await flush();
+  assert.equal(c.g.session.phase, 'ready');
+  c.routed({ event: 'commit', seq: 2 });
+  t.mock.timers.tick(100); await flush();
+  assert.equal(c.g.session.phase, 'cancelling');
+});
+test('staging exceeding the configured budget cancels and ignores late preparation', async t => {
+  const c = setup(t, { stagingTimeout: 300 });
+  c.source({ event: 'source-prepare', paths: ['/lab/fixture.txt'], observedUptimeMs: 12345 });
+  c.routed({ event: 'prepared', seq: 1 }); await flush();
+  t.mock.timers.tick(301); await flush();
+  assert.equal(c.g.session.phase, 'cancelling');
+  c.received({ event: 'prepared' }); await flush();
+  assert.equal(c.route.some(command => command.command === 'ready'), false);
+});
 test('one physical gesture prepares, accepts source, activates, releases and finishes in order', async t => {
   const c = setup(t); await c.enter();
   assert.deepEqual(c.route.map(x => x.command), ['prepare', 'ready', 'source-accepted']);

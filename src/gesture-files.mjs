@@ -90,7 +90,7 @@ export async function pruneStagedInbox(inbox, { maxAgeMs = 30 * 60 * 1000, activ
 }
 export async function selectedFiles(peer, paths, context, { signal, maxBytes = DRAG_BYTES } = {}) {
   signal?.throwIfAborted();
-  const manifest = await collect(paths);
+  const manifest = await collect(paths, { prehash: false });
   signal?.throwIfAborted();
   const bytes = manifest.entries.reduce((total, entry) => total + (entry.kind === 'file' ? entry.size : 0), 0);
   if (bytes > maxBytes) throw Error('Current full-staging drag limit is 64 MiB');
