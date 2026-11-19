@@ -61,6 +61,28 @@ struct NativeStartPermit {
         return true
     }
 }
+struct DestinationBootstrap {
+    // Leave room for pointer movement while the router grants the one-use permit.
+    static let panelSize: CGFloat = 192
+    static let dragPanelSize: CGFloat = 48
+    let readyAfter: TimeInterval
+
+    enum Placement { case wait, recenter, post }
+
+    init(placedAt time: TimeInterval) { readyAfter = time + 0.020 }
+
+    static func frame(around point: NSPoint, size: CGFloat = DestinationBootstrap.panelSize) -> NSRect {
+        NSRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
+    }
+
+    func placement(at point: NSPoint, in frame: NSRect, now: TimeInterval, permit: NativeStartPermit,
+                   frontmostWindow: () -> Int) -> Placement {
+        guard now <= permit.deadline else { return .wait }
+        guard frame.insetBy(dx: 16, dy: 16).contains(point) else { return .recenter }
+        guard now >= readyAfter, frontmostWindow() == permit.windowNumber else { return .wait }
+        return .post
+    }
+}
 if arguments == ["--self-test"] {
     let id = UUID().uuidString
     precondition(Commit(["command": "commit", "id": id, "generation": 1])?.generation == 1)
@@ -82,7 +104,23 @@ if arguments == ["--self-test"] {
     precondition(!permit.consume(event: 42, window: 8, tag: 123, now: 9))
     var expired = NativeStartPermit(eventNumber: 42, windowNumber: 8, tag: 123, deadline: 10)
     precondition(!expired.consume(event: 42, window: 8, tag: 123, now: 11))
-    print("PASS: gesture validation, generation marker, heartbeat and one-use local start permit; no UI/input")
+    let initialPoint = NSPoint(x: 1855, y: 659)
+    let fastCrossing = NSPoint(x: 1795, y: 688)
+    let beyondPanel = NSPoint(x: 1680, y: 688)
+    let frame = DestinationBootstrap.frame(around: initialPoint)
+    let bootstrap = DestinationBootstrap(placedAt: 9)
+    let placementPermit = NativeStartPermit(eventNumber: 42, windowNumber: 8, tag: 123, deadline: 10)
+    precondition(!DestinationBootstrap.frame(around: initialPoint, size: DestinationBootstrap.dragPanelSize).contains(fastCrossing))
+    precondition(bootstrap.placement(at: fastCrossing, in: frame, now: 9.01, permit: placementPermit) { 8 } == .wait)
+    precondition(bootstrap.placement(at: fastCrossing, in: frame, now: 9.03, permit: placementPermit) { 9 } == .wait)
+    precondition(bootstrap.placement(at: fastCrossing, in: frame, now: 9.03, permit: placementPermit) { 8 } == .post)
+    precondition(bootstrap.placement(at: beyondPanel, in: frame, now: 9.03, permit: placementPermit) { 8 } == .recenter)
+    let recentered = DestinationBootstrap(placedAt: 9.03)
+    let newFrame = DestinationBootstrap.frame(around: beyondPanel)
+    precondition(recentered.placement(at: beyondPanel, in: newFrame, now: 9.04, permit: placementPermit) { 8 } == .wait)
+    precondition(recentered.placement(at: beyondPanel, in: newFrame, now: 9.06, permit: placementPermit) { 8 } == .post)
+    precondition(recentered.placement(at: beyondPanel, in: newFrame, now: 10.01, permit: placementPermit) { 8 } == .wait)
+    print("PASS: gesture validation, heartbeat, one-use local start permit and destination window placement; no UI/input")
     exit(0)
 }
 guard arguments.isEmpty, ipcDirectory != nil else {
@@ -91,7 +129,7 @@ guard arguments.isEmpty, ipcDirectory != nil else {
 
 final class ReverseView: NSView, NSDraggingSource {
     weak var owner: ReverseIncoming?
-    init(owner: ReverseIncoming) { self.owner = owner; super.init(frame: NSRect(x: 0, y: 0, width: 48, height: 48)) }
+    init(owner: ReverseIncoming, size: NSSize) { self.owner = owner; super.init(frame: NSRect(origin: .zero, size: size)) }
     required init?(coder: NSCoder) { fatalError() }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         guard let event, let owner, !owner.cancelled, !owner.completed else { return false }
@@ -105,6 +143,7 @@ final class ReverseView: NSView, NSDraggingSource {
         guard let owner else { return }
         owner.started = true
         if owner.cancelled || owner.completed || reverseIncoming !== owner { owner.postEscape(); return }
+        owner.panel?.setFrame(DestinationBootstrap.frame(around: point, size: DestinationBootstrap.dragPanelSize), display: false)
         emit(["event": "drag-loop-running", "id": owner.id, "generation": owner.generation,
               "dragSequence": session.draggingSequenceNumber, "mouseButtons": NSEvent.pressedMouseButtons])
     }
@@ -136,6 +175,8 @@ final class ReverseIncoming {
     var lastWindow = 0
     var moves = 0
     var startPermit: NativeStartPermit?
+    private var pendingStart: NativeStartPermit?
+    private var bootstrap: DestinationBootstrap?
     var startDeadline: TimeInterval = 0
     var physicalEventNumber = 0
     var downPosted = false
@@ -145,54 +186,84 @@ final class ReverseIncoming {
         guard !activating && !cancelled else { return }
         activating = true
         emit(["event": "activate-requested", "id": id, "generation": generation, "mouseButtons": NSEvent.pressedMouseButtons])
-        let point = NSEvent.mouseLocation
-        let panel = NSPanel(contentRect: NSRect(x: point.x - 24, y: point.y - 24, width: 48, height: 48),
+        let rect = DestinationBootstrap.frame(around: NSEvent.mouseLocation)
+        let panel = NSPanel(contentRect: rect,
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu; panel.isOpaque = false; panel.isReleasedWhenClosed = false
         panel.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.03)
         panel.ignoresMouseEvents = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let view = ReverseView(owner: self); panel.contentView = view
+        let view = ReverseView(owner: self, size: rect.size); panel.contentView = view
         self.panel = panel; self.view = view; panel.orderFrontRegardless()
         physicalEventNumber = physicalDownEventNumber
-        startDeadline = ProcessInfo.processInfo.systemUptime + 0.5
+        let now = ProcessInfo.processInfo.systemUptime
+        bootstrap = DestinationBootstrap(placedAt: now)
+        startDeadline = now + 0.5
         guard let position = CGEvent(source: nil)?.location else { finish(false); return }
         emit(["event": "destination-start-request", "id": id, "generation": generation,
               "pid": ProcessInfo.processInfo.processIdentifier, "window": panel.windowNumber,
               "x": position.x, "y": position.y, "physicalDownEventNumber": physicalEventNumber])
     }
     func startPermitted(_ message: [String: Any]) {
-        guard activating, !started, !cancelled, !completed, !downPosted, reverseIncoming === self,
-              ProcessInfo.processInfo.systemUptime < startDeadline,
+        let now = ProcessInfo.processInfo.systemUptime
+        guard activating, !started, !cancelled, !completed, !downPosted, pendingStart == nil,
+              reverseIncoming === self, now < startDeadline,
               let panel, panel.isVisible, message["window"] as? Int == panel.windowNumber,
               message["pid"] as? Int == Int(ProcessInfo.processInfo.processIdentifier),
               message["physicalDownEventNumber"] as? Int == physicalEventNumber,
               let text = message["nonce"] as? String, text.count == 16, text.hasPrefix("45424453"),
               let tag = UInt64(text, radix: 16),
               let expires = message["expiresUptimeMs"] as? Double,
-              expires > ProcessInfo.processInfo.systemUptime * 1000,
-              expires - ProcessInfo.processInfo.systemUptime * 1000 <= 300,
+              expires > now * 1000, expires - now * 1000 <= 300 else { cancel(); return }
+        pendingStart = NativeStartPermit(eventNumber: physicalEventNumber, windowNumber: panel.windowNumber,
+                                         tag: tag, deadline: min(startDeadline, expires / 1000))
+    }
+    func advanceStart(now: TimeInterval) {
+        guard activating, !started, !cancelled, !completed, reverseIncoming === self else { return }
+        if now > (pendingStart?.deadline ?? startDeadline) {
+            if let permit = pendingStart {
+                emit(["event": "destination-start-window-not-ready", "id": id, "generation": generation,
+                      "window": permit.windowNumber])
+            }
+            cancel(); return
+        }
+        guard let permit = pendingStart, let panel, panel.isVisible, let bootstrap,
               let position = CGEvent(source: nil)?.location,
-              let source = CGEventSource(stateID: .combinedSessionState) else { cancel(); return }
-        let point = NSEvent.mouseLocation
-        panel.setFrameOrigin(NSPoint(x: point.x - 24, y: point.y - 24))
+              let primary = NSScreen.screens.first else { return }
+        // Hit-test the same pointer position that the Quartz event will use.
+        let quartzMain = CGDisplayBounds(CGMainDisplayID())
+        let point = NSPoint(x: primary.frame.minX + position.x - quartzMain.minX,
+                            y: primary.frame.maxY - (position.y - quartzMain.minY))
+        switch bootstrap.placement(at: point, in: panel.frame, now: now, permit: permit, frontmostWindow: {
+            NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        }) {
+        case .wait: return
+        case .recenter:
+            panel.setFrameOrigin(DestinationBootstrap.frame(around: point).origin)
+            self.bootstrap = DestinationBootstrap(placedAt: ProcessInfo.processInfo.systemUptime)
+        case .post:
+            postStart(at: position, permit: permit)
+        }
+    }
+    private func postStart(at position: CGPoint, permit: NativeStartPermit) {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { cancel(); return }
         let all: CGEventFilterMask = [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents]
         source.setLocalEventsFilterDuringSuppressionState(all, state: .eventSuppressionStateRemoteMouseDrag)
         source.setLocalEventsFilterDuringSuppressionState(all, state: .eventSuppressionStateSuppressionInterval)
         source.localEventsSuppressionInterval = 0
         guard let event = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
                                   mouseCursorPosition: position, mouseButton: .left) else { cancel(); return }
-        event.setIntegerValueField(.eventSourceUserData, value: Int64(bitPattern: tag))
-        event.setIntegerValueField(.mouseEventNumber, value: Int64(physicalEventNumber))
+        event.setIntegerValueField(.eventSourceUserData, value: Int64(bitPattern: permit.tag))
+        event.setIntegerValueField(.mouseEventNumber, value: Int64(permit.eventNumber))
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        startPermit = NativeStartPermit(eventNumber: physicalEventNumber, windowNumber: panel.windowNumber,
-                                        tag: tag, deadline: min(startDeadline, expires / 1000))
+        guard ProcessInfo.processInfo.systemUptime <= permit.deadline else { cancel(); return }
+        pendingStart = nil; startPermit = permit
         eventSource = source; downPosted = true
-        emit(["event": "destination-start-posted", "id": id, "generation": generation,
-              "window": panel.windowNumber, "x": position.x, "y": position.y])
         // The isolated router admits this single nonce only for the current held generation.
         // Its final event tap verifies the actual target; it also owns release balancing.
         event.post(tap: .cghidEventTap)
+        emit(["event": "destination-start-posted", "id": id, "generation": generation,
+              "window": permit.windowNumber, "x": position.x, "y": position.y])
     }
     func begin(from event: NSEvent, in view: ReverseView) {
         emit(["event": "destination-down-observed", "id": id, "generation": generation,
@@ -213,9 +284,10 @@ final class ReverseIncoming {
               "currentEvent": NSApp.currentEvent === event, "mouseButtons": NSEvent.pressedMouseButtons,
               "eventNumber": event.eventNumber,
               "quartzEventNumber": event.cgEvent?.getIntegerValueField(.mouseEventNumber) ?? -1])
+        let point = view.convert(event.locationInWindow, from: nil)
         let items = paths.map { file -> NSDraggingItem in
             let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: file))
-            item.setDraggingFrame(NSRect(x: 8, y: 8, width: 32, height: 32), contents: NSWorkspace.shared.icon(forFile: file))
+            item.setDraggingFrame(NSRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32), contents: NSWorkspace.shared.icon(forFile: file))
             return item
         }
         view.beginDraggingSession(with: items, event: event, source: view)
@@ -235,7 +307,7 @@ final class ReverseIncoming {
         guard !completed, !cancelled else { return }; cancelled = true
         let neverDispatched = startPermit?.consumed != true
         panel?.ignoresMouseEvents = true
-        startPermit = nil
+        pendingStart = nil; startPermit = nil
         if !started && (!activating || neverDispatched) { finish(false); return }
         postEscape()
         // A failed local cancellation must not leave an invisible system drag alive.
@@ -372,11 +444,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
         heartbeat.observe(try? String(contentsOfFile: runtimeIPC + "/heartbeat", encoding: .utf8), wallMs: now, uptime: uptime)
         if !heartbeat.alive(uptime) {
             panel.ignoresMouseEvents = true
+            if let receiver = reverseIncoming, receiver.activating, !receiver.started { receiver.cancel() }
             if heartbeat.expired(uptime) { emit(["event": "source-exiting", "reason": "Heartbeat lease expired"]); capture.reset(); NSApp.terminate(nil) }
             return
         }
         readCommands()
-        if let receiver = reverseIncoming, receiver.activating, !receiver.started, uptime > receiver.startDeadline { receiver.cancel() }
+        reverseIncoming?.advanceStart(now: ProcessInfo.processInfo.systemUptime)
         let armed = uptime < candidateUntil && capture.candidateGeneration != nil && capture.candidateGeneration != capture.blockedGeneration && AXIsProcessTrusted()
         panel.ignoresMouseEvents = !armed
         if armed != wasArmed {
