@@ -159,6 +159,12 @@ class GestureLab {
         readonly System.Windows.Forms.Timer watch=new System.Windows.Forms.Timer {Interval=20};
         string[] paths;
         bool accepted;
+        string sourceEdge="left";
+        void Place(string edge) {
+            var screen=Screen.PrimaryScreen.Bounds;
+            Bounds=new System.Drawing.Rectangle(edge=="right"?screen.Right-12:screen.Left,screen.Top,12,screen.Height);
+            sourceEdge=edge;
+        }
         protected override bool ShowWithoutActivation {get{return true;}}
         protected override CreateParams CreateParams {get{var p=base.CreateParams;p.ExStyle|=0x08000000|0x80|0x20;return p;}}
         void Pass(bool pass){int style=GetWindowLong(Handle,-20);SetWindowLong(Handle,-20,pass?style|0x20:style&~0x20);}
@@ -172,7 +178,7 @@ class GestureLab {
         public SourceEdge() {
             FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;TopMost=true;
             StartPosition=FormStartPosition.Manual;BackColor=System.Drawing.Color.DodgerBlue;Opacity=0.04;AllowDrop=true;
-            var screen=Screen.PrimaryScreen.Bounds;Bounds=new System.Drawing.Rectangle(screen.Left,screen.Top,12,screen.Height);
+            Place(sourceEdge);
             DragEnter+=delegate(object sender,DragEventArgs e) {
                 if(!Armed||state.id!=null||(e.AllowedEffect&DragDropEffects.Copy)==0||!e.Data.GetDataPresent(DataFormats.FileDrop)) {
                     e.Effect=DragDropEffects.None;Emit(new {@event="source-ignored",reason="unarmed-busy-or-no-copy-file-drop"});return;
@@ -209,12 +215,17 @@ class GestureLab {
             string command=m["command"] as string;
             long generation=Machine.Number(m,"generation");
             if(command=="candidate") {
-                if(!m.ContainsKey("edge")||(string)m["edge"]!="left"||!m.ContainsKey("source")||!(m["source"] is string)||String.IsNullOrWhiteSpace((string)m["source"])||((string)m["source"]).Length>255)throw new ArgumentException("Expected Windows left-edge candidate");
+                string edge=m.ContainsKey("edge")?m["edge"] as string:null;
+                if((edge!="left"&&edge!="right")||!m.ContainsKey("source")||!(m["source"] is string)||String.IsNullOrWhiteSpace((string)m["source"])||((string)m["source"]).Length>255)throw new ArgumentException("Expected Windows edge candidate");
                 long routeSequence=Machine.Number(m,"routeSeq");
                 int lease=checked((int)Machine.Number(m,"leaseMs"));
                 long received=Machine.Number(m,"receivedAt");
                 double observed=SourceState.ReadObservedTime(m);
                 if(routeSequence<=state.routeSeq||generation<state.generation||lease<50||lease>500||Now-received>=lease)throw new ArgumentException("Stale candidate");
+                if(edge!=sourceEdge) {
+                    if(state.id!=null||Incoming)throw new ArgumentException("Source edge cannot move during a gesture");
+                    Pass(true);Hide();Place(edge);
+                }
                 if(generation!=state.generation&&state.id!=null)Reset("candidate-generation-changed",true);
                 state.CandidateUpdate(generation,routeSequence,lease);
                 state.deadline=received+lease;state.observedUptimeMs=observed;

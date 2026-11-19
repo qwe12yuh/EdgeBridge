@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>EdgeBridge 控制台</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="brand" href="/" aria-label="EdgeBridge 控制台"><span class="mark" aria-hidden="true">⇄</span><span>EdgeBridge <small>DEVICE CONTROL</small></span></a>
+      <span class="tag"><i></i> 仅本机</span>
+    </header>
+    <section class="panel" aria-labelledby="title">
+      <div class="eyebrow">WORKSPACE / 双机工作区</div>
+      <div class="intro">
+        <h1 id="title">跨屏协同</h1>
+        <span class="pill" id="mode" role="status">正在检查</span>
+      </div>
+      <p id="description">查看 Mac 与 Windows 的连接状态。</p>
+      <div class="actions">
+        <button id="start" type="button" disabled>启动协同</button>
+        <button id="stop" type="button" disabled>停止协同</button>
+      </div>
+      <p class="hint">停止会关闭本次键鼠共享与文件拖放。请先完成正在进行的拖放。关掉网页不会停止服务。</p>
+      <p id="notice" class="notice" role="alert" hidden></p>
+    </section>
+    <section class="panel layout" aria-labelledby="layout-title">
+      <div class="layout-header">
+        <div><div class="eyebrow">SCREEN ARRANGEMENT</div><h2 id="layout-title">屏幕位置</h2></div>
+        <div class="layout-badges"><span id="layout-view" class="tag">当前布局</span><span id="link" class="indicator">检查中</span></div>
+      </div>
+      <p>按桌面上的实际位置排列。鼠标和文件都会从两块屏幕相邻的边缘跨过去。</p>
+      <div class="devices" id="devices" data-layout="mac-left" aria-label="屏幕布局预览">
+        <article class="device mac-device">
+          <span class="position" id="mac-position">左侧</span>
+          <div class="monitor" aria-hidden="true"><span class="screen-label">macOS</span></div>
+          <h3>Mac</h3><span id="mac" class="indicator">检查中</span>
+        </article>
+        <div class="bridge" aria-hidden="true"><span></span><b>↔</b><span></span></div>
+        <article class="device win-device">
+          <span class="position" id="win-position">右侧</span>
+          <div class="monitor" aria-hidden="true"><span class="screen-label">Windows</span></div>
+          <h3>Windows</h3><span id="windows" class="indicator">检查中</span>
+        </article>
+      </div>
+      <div class="layout-controls">
+        <fieldset>
+          <legend class="sr-only">选择 Mac 的位置</legend>
+          <label><input type="radio" name="layout" value="mac-left" checked><span>Mac 在左</span></label>
+          <label><input type="radio" name="layout" value="mac-right"><span>Mac 在右</span></label>
+        </fieldset>
+        <button id="apply" type="button" disabled>应用布局</button>
+      </div>
+      <p class="hint" id="layout-hint" aria-live="polite">正在读取当前布局。</p>
+    </section>
+    <footer>EdgeBridge · 控制台只在这台 Mac 上开放</footer>
+  </main>
+</body>
+</html>
